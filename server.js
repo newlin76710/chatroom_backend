@@ -25,7 +25,7 @@ const openai = new OpenAI({
 async function callAI(message) {
   try {
     const completion = await openai.chat.completions.create({
-      model: '"openai/gpt-3.5-turbo', // 可換成 openai/gpt-4o
+      model: 'openrouter/auto', // 可換成 openai/gpt-4o
       messages: [
         { role: 'system', content: '你是一個幫助使用者的繁體中文助理。' },
         { role: 'user', content: message },
@@ -57,5 +57,20 @@ io.on('connection', (socket) => {
   });
 });
 
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log('Server running', PORT));
+// 嘗試監聽 port，如果被占用就 fallback
+function listenPort(port) {
+  server.listen(port, () => {
+    console.log(`Server running on port ${port}`);
+  }).on('error', (err) => {
+    if (err.code === 'EADDRINUSE') {
+      console.warn(`Port ${port} 已被占用，嘗試另一個 port`);
+      if (port === 3000) listenPort(10000); // fallback 10000
+    } else {
+      console.error(err);
+    }
+  });
+}
+
+// 優先平台提供 port，再 fallback 3000
+const initialPort = process.env.PORT || 3000;
+listenPort(initialPort);
