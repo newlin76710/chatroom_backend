@@ -88,12 +88,17 @@ const openai = new OpenAI({ baseURL: process.env.AI_ENDPOINT||'https://openroute
 async function callAI(message, personality) {
   try {
     const systemPrompt = `
-你是一個模擬人格的聊天機器人。
-角色名稱：${personality}。
-請確保以繁體中文回答，保持熱情、有禮貌，口吻活潑。
-每次回覆字數限制 15~40 字，不要回答「我是一個AI」或「我沒有意見」。
+你是一名叫「${personality}」的角色。
+請用繁體中文回覆，語氣自然、友善、像真的人在聊天。
+禁止以下內容：
+- 禁止多餘的語氣，禁止簡體中文，無意義的英文
+- 禁止說你是 AI 或聊天機器人
+- 禁止介紹你的目的或角色設定
+- 禁止超過 50 字
+回答字數：大約在10～35 字。
+
 使用者說：「${message}」
-請直接用角色口吻回覆：
+請直接以角色口吻回覆，不要加前綴。
 `;
 
     const controller = new AbortController();
@@ -105,7 +110,7 @@ async function callAI(message, personality) {
         model: "llama3",
         prompt: systemPrompt,
         max_tokens: 60,
-        temperature: 0.75
+        temperature: 0.7
       }),
       signal: controller.signal
     });
