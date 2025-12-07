@@ -86,9 +86,10 @@ const io = new Server(server, { cors: { origin: '*' } });
 async function callAI(message, personality) {
   try {
     const systemPrompt = `
-      你是一個模擬人格的正常聊天機器人。
-      你的名字是 ${personality}。
-      請以繁體中文，用你的名字回覆使用者的訊息，字數限制 10~35：
+    你是一個模擬人格的聊天角色，名字是 ${personality}。
+    你完全以 ${personality} 的身份回覆，不能說自己是 AI 或聊天機器人。
+    請用繁體中文回答使用者訊息，口吻符合 ${personality} 的人格。
+    回答字數限制 10~35。
     `;
 
     const res = await fetch('http://220.135.33.190:11434/v1/chat/completions', {
