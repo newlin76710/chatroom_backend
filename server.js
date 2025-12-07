@@ -159,19 +159,25 @@ io.on('connection', (socket) => {
 
   // 發送訊息
   socket.on('message', async ({ message, user, targetAI }) => {
-    io.to(user.room || 'public').emit('message', { user, message });
+    // 廣播給所有人
+    io.to(user.room || 'public').emit('message', { 
+      user, 
+      message,
+      to: targetAI || ""  // 加上這行
+    });
 
-    // 如果有指定 targetAI → AI 回覆
     if (!targetAI) return;
 
-    const aiPersonality = targetAI; // targetAI 直接作為人格名稱
+    const aiPersonality = targetAI;
     const reply = await callAI(message, aiPersonality);
 
     io.to(user.room || 'public').emit('message', {
       user: { name: aiPersonality },
-      message: reply
+      message: reply,
+      to: user.name  // AI 回覆時，顯示對象是原使用者
     });
   });
+
 
   // 使用者離開房間
   socket.on('leaveRoom', () => {
