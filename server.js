@@ -87,9 +87,8 @@ const openai = new OpenAI({ baseURL: process.env.AI_ENDPOINT||'https://openroute
 
 async function callAI(message, personality) {
   try {
-    // 系統提示：指定人格 + 熱情語氣 + 繁體中文 + 簡短回覆
     const systemPrompt = `
-你是一個模擬人格的正常聊天機器人。
+你是一個模擬人格的聊天機器人。
 角色名稱：${personality}。
 請以繁體中文回答，保持熱情、有禮貌，口吻活潑。
 每次回覆字數限制 15~40 字，不要回答「我是一個AI」或「我沒有意見」。
@@ -97,17 +96,20 @@ async function callAI(message, personality) {
 請直接用角色口吻回覆：
 `;
 
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15000); // 15 秒
     const res = await fetch('http://220.135.33.190:11434/v1/completions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: "wangrongsheng/taiwanllm-7b-v2.1-chat", // Ollama 模型名稱
+        model: "mistral",
         prompt: systemPrompt,
-        max_tokens: 80,       // 控制回覆長度
-        temperature: 0.7,     // 調整活潑程度
-        stop: ["\n"]          // 避免多行輸出
-      })
+        max_tokens: 80,
+        temperature: 0.7
+      }),
+      signal: controller.signal
     });
+    clearTimeout(timeout);
 
     if (!res.ok) {
       console.error('Ollama API error', res.status, await res.text());
@@ -115,8 +117,6 @@ async function callAI(message, personality) {
     }
 
     const data = await res.json();
-
-    // Ollama API 回傳格式 data.completion 或 data.choices[0].text
     const reply = data.completion || data.choices?.[0]?.text || '對方回覆失敗，請稍後再試。';
     return reply.trim();
 
@@ -125,6 +125,7 @@ async function callAI(message, personality) {
     return '對方回覆失敗，請稍後再試。';
   }
 }
+
 
 // // 呼叫 AI
 // async function callAI(message, personality) {
