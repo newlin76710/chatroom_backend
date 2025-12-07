@@ -85,19 +85,6 @@ const io = new Server(server, { cors: { origin: '*' } });
 
 const openai = new OpenAI({ baseURL: process.env.AI_ENDPOINT||'https://openrouter.ai/api/v1', apiKey: process.env.API_KEY||"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" });
 
-// 生成隨機 AI 人格
-function randomAIPersonality() {
-  const genders = ["女性", "男性"];
-  const maritalStatuses = ["未婚", "已婚"];
-  const personalityIndexes = [1,2,3,4];
-
-  const gender = genders[Math.floor(Math.random() * genders.length)];
-  const maritalStatus = maritalStatuses[Math.floor(Math.random() * maritalStatuses.length)];
-  const personalityIndex = personalityIndexes[Math.floor(Math.random() * personalityIndexes.length)];
-
-  return `${maritalStatus}${gender}-${personalityIndex}`;
-}
-
 async function callAI(message, personality) {
   try {
     const systemPrompt = `你是一個模擬人格的正常聊天，角色是 ${personality}，請以繁體中文，用這個角色的口吻回答，字數限制 10~35：\n${message}`;
