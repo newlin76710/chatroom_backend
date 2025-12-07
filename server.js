@@ -147,14 +147,22 @@ io.on('connection', (socket) => {
   });
 
   // 使用者發送訊息
-  socket.on('message', async ({ room, message, user }) => {
-    // 廣播訊息給房間內所有人
-    io.to(room).emit('message', { user, message });
+  socket.on('message', async ({ message, user, aiPersonality }) => {
+    if (aiPersonality) {
+      // AI 回覆
+      const personalityPromptMap = {
+        friendly: "請用友善口吻回答：",
+        sarcastic: "請用諷刺口吻回答：",
+        motivational: "請用勵志口吻回答：",
+        academic: "請用學術口吻回答："
+      };
+      const prompt = (personalityPromptMap[aiPersonality] || "") + message;
+      const reply = await callAI(prompt);
 
-    // 如果訊息包含 @bot，呼叫 AI 回覆
-    if (message.includes('@bot')) {
-      const reply = await callAI(message.replace('@bot', '').trim());
-      io.to(room).emit('message', { user: { name: 'AI小助手' }, message: reply });
+      io.emit('message', { user: { name: 'AI小助手' }, message: reply });
+    } else {
+      // 一般聊天室訊息
+      io.to('public').emit('message', { user, message });
     }
   });
 
