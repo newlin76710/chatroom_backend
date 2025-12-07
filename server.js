@@ -83,7 +83,7 @@ app.post("/auth/oauth", async (req, res) => {
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: '*' } });
 
-const openai = new OpenAI({ baseURL: 'https://openrouter.ai/api/v1', apiKey: process.env.OPENROUTER_API_KEY });
+const openai = new OpenAI({ baseURL: process.env.AI_ENDPOINT||'https://openrouter.ai/api/v1', apiKey: process.env.API_KEY||"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" });
 
 // 生成隨機 AI 人格
 function randomAIPersonality() {
@@ -103,8 +103,9 @@ async function callAI(message, personality) {
   try {
     const systemPrompt = `你是一個模擬人格的正常聊天，角色是 ${personality}，請以繁體中文，請用這個角色的口吻回答，字數限字在10~30內：`;
     const completion = await openai.chat.completions.create({
-      model: 'tngtech/deepseek-r1t2-chimera:free',
+      //model: 'tngtech/deepseek-r1t2-chimera:free',
       //model: "amazon/nova-2-lite-v1:free",
+      model: "deepseek-chat",
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: message }
