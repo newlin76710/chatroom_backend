@@ -85,23 +85,64 @@ const io = new Server(server, { cors: { origin: '*' } });
 
 const openai = new OpenAI({ baseURL: process.env.AI_ENDPOINT||'https://openrouter.ai/api/v1', apiKey: process.env.API_KEY||"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" });
 
-// 呼叫 AI
 async function callAI(message, personality) {
   try {
-    const systemPrompt = `你是一個模擬人格的正常聊天，角色是 ${personality}，請以繁體中文，請用這個角色的口吻回答，字數限字在10~30內：`;
-    const completion = await openai.chat.completions.create({
-      model: 'tngtech/deepseek-r1t2-chimera:free',
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: message }
-      ]
+    // 系統提示：指定人格 + 熱情語氣 + 繁體中文 + 簡短回覆
+    const systemPrompt = `
+你是一個模擬人格的正常聊天機器人。
+角色名稱：${personality}。
+請以繁體中文回答，保持熱情、有禮貌，口吻活潑。
+每次回覆字數限制 15~40 字，不要回答「我是一個AI」或「我沒有意見」。
+使用者說：「${message}」
+請直接用角色口吻回覆：
+`;
+
+    const res = await fetch('http://220.135.33.190:11434/v1/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: "wangrongsheng/taiwanllm-7b-v2.1-chat", // Ollama 模型名稱
+        prompt: systemPrompt,
+        max_tokens: 80,       // 控制回覆長度
+        temperature: 0.7,     // 調整活潑程度
+        stop: ["\n"]          // 避免多行輸出
+      })
     });
-    return completion.choices[0].message.content;
+
+    if (!res.ok) {
+      console.error('Ollama API error', res.status, await res.text());
+      return '對方回覆失敗，請稍後再試。';
+    }
+
+    const data = await res.json();
+
+    // Ollama API 回傳格式 data.completion 或 data.choices[0].text
+    const reply = data.completion || data.choices?.[0]?.text || '對方回覆失敗，請稍後再試。';
+    return reply.trim();
+
   } catch (err) {
-    console.error(err.response?.data || err.message);
-    return '對方 回覆失敗，請稍後再試。';
+    console.error('callAI error', err);
+    return '對方回覆失敗，請稍後再試。';
   }
 }
+
+// // 呼叫 AI
+// async function callAI(message, personality) {
+//   try {
+//     const systemPrompt = `你是一個模擬人格的正常聊天，角色是 ${personality}，請以繁體中文，請用這個角色的口吻回答，字數限字在10~30內：`;
+//     const completion = await openai.chat.completions.create({
+//       model: 'tngtech/deepseek-r1t2-chimera:free',
+//       messages: [
+//         { role: 'system', content: systemPrompt },
+//         { role: 'user', content: message }
+//       ]
+//     });
+//     return completion.choices[0].message.content;
+//   } catch (err) {
+//     console.error(err.response?.data || err.message);
+//     return '對方 回覆失敗，請稍後再試。';
+//   }
+// }
 
 io.on('connection', (socket) => {
   console.log('connected', socket.id);
