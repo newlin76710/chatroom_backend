@@ -102,7 +102,7 @@ async function callAI(message, personality) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: "mistral",
+        model: "deepseek-chat",
         prompt: systemPrompt,
         max_tokens: 80,
         temperature: 0.7
