@@ -105,7 +105,7 @@ async function callAI(message, personality) {
     const completion = await openai.chat.completions.create({
       //model: 'tngtech/deepseek-r1t2-chimera:free',
       //model: "amazon/nova-2-lite-v1:free",
-      model: "deepseek-chat",
+      model: "deepseek-r1:7b",
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: message }
