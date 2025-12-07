@@ -170,21 +170,19 @@ io.on('connection', (socket) => {
   });
 
   // 發送訊息
-  socket.on('message', async ({ message, user, targetAI }) => {
-    io.to(user.room || 'public').emit('message', { 
-      user, 
-      message,
-      to: targetAI || ""  
-    });
+  socket.on('message', async ({ room, message, user, target }) => {
+    // 先廣播原訊息
+    io.to(room).emit('message', { user, message, target });
 
-    if (!targetAI) return;
-
-    const reply = await callAI(message, targetAI);
-    io.to(user.room || 'public').emit('message', {
-      user: { name: targetAI },
-      message: reply,
-      to: user.name
-    });
+    // 如果 target 是 AI
+    if (target && aiAvatars[target]) {
+      const aiReply = await callAI(message, target); // 呼叫你之前寫的 callAI
+      io.to(room).emit('message', {
+        user: { name: target },
+        message: aiReply,
+        target: user.name, // AI 回覆給原發訊息的人
+      });
+    }
   });
 
   // 離開房間
