@@ -103,7 +103,7 @@ async function callAI(message, personality) {
   try {
     const systemPrompt = `你是一個模擬人格的聊天助手，角色是 ${personality}，請用這個角色的口吻回答：`;
     const completion = await openai.chat.completions.create({
-      model: 'amazon/nova-2-lite-v1:free',
+      model: 'tngtech/tng-r1t-chimera:free',
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: message }
