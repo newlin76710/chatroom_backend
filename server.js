@@ -112,7 +112,7 @@ async function callAI(message, personality) {
     return completion.choices[0].message.content;
   } catch (err) {
     console.error(err.response?.data || err.message);
-    return 'AI 回覆失敗，請稍後再試。';
+    return '對方 回覆失敗，請稍後再試。';
   }
 }
 
@@ -139,7 +139,7 @@ io.on('connection', (socket) => {
     const reply = await callAI(message, aiPersonality);
 
     io.to(user.room || 'public').emit('message', {
-      user: { name: `AI-${aiPersonality}`, role: aiPersonality },
+      user: { name: aiPersonality },
       message: reply
     });
   });
