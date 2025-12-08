@@ -72,7 +72,7 @@ async function callAI(userMessage, aiName) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         model: "llama3",
-        prompt: `你是一名叫「${aiName}」的台灣人，個性是：${p.desc}（${p.style}）。請用繁體中文回覆：「${userMessage}」`,
+        prompt: `你是一名叫「${aiName}」的台灣人，個性是：${p.desc}（${p.style}）。請用繁體中文回覆省略廢話控制在10~30字：「${userMessage}」`,
         max_tokens: maxLen,
         temperature: 0.8
       })
