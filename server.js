@@ -1,3 +1,4 @@
+// server.js （或你原本的檔案）
 import express from 'express';
 import http from 'http';
 import { Server } from 'socket.io';
@@ -15,7 +16,7 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false }
 });
 
-// --- AI 設定 ---
+// --- AI 設定 (保留你原本的 aiProfiles) ---
 const aiProfiles = {
   "林怡君": { style: "外向", desc: "很健談，喜歡分享生活。" },
   "張雅婷": { style: "害羞", desc: "說話溫柔，句子偏短。" },
@@ -39,19 +40,69 @@ const aiNames = Object.keys(aiProfiles);
 // --- Express + Socket.io ---
 const app = express();
 const server = http.createServer(app);
+
+// 若你想讓 socket 驗證 token（可選），保留下面 io 實例；若不想驗證也可以把 io.use(...) 移除
 const io = new Server(server, { cors: { origin: "*" } });
 
 app.use(cors());
 app.use(express.json());
 
-// --- 訪客登入 ---
-app.post("/auth/guest", async (req, res) => {
+// ---------- Helper: 取得或建立 guest ----------
+async function createGuest() {
   const token = crypto.randomUUID();
-  await pool.query("INSERT INTO guest_users (guest_token) VALUES ($1)", [token]);
-  res.json({ guestToken: token });
+  const name = "訪客 " + Math.floor(1000 + Math.random() * 9000);
+  await pool.query(
+    "INSERT INTO guest_users (guest_token, name) VALUES ($1, $2)",
+    [token, name]
+  );
+  return { guestToken: token, name };
+}
+
+async function findGuestByToken(token) {
+  const r = await pool.query("SELECT guest_token, name FROM guest_users WHERE guest_token = $1", [token]);
+  return r.rows[0] || null;
+}
+
+// --- 訪客登入（升級版） ---
+// POST /auth/guest
+// body: { oldToken? }
+app.post("/auth/guest", async (req, res) => {
+  try {
+    const { oldToken } = req.body || {};
+
+    if (oldToken) {
+      const existing = await findGuestByToken(oldToken);
+      if (existing) {
+        return res.json({
+          guestToken: existing.guest_token,
+          name: existing.name
+        });
+      }
+    }
+
+    const g = await createGuest();
+    return res.json(g);
+  } catch (err) {
+    console.error("guest login error:", err);
+    res.status(500).json({ error: "訪客登入失敗" });
+  }
 });
 
-// --- AI 回覆 API ---
+// 可選：提供一個用 token 查名字的 API（前端開啟頁面時可驗證 token）
+app.post("/auth/guest/verify", async (req, res) => {
+  try {
+    const { token } = req.body || {};
+    if (!token) return res.status(400).json({ error: "missing token" });
+    const g = await findGuestByToken(token);
+    if (!g) return res.status(404).json({ error: "not found" });
+    res.json({ guestToken: g.guest_token, name: g.name });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "verify error" });
+  }
+});
+
+// --- AI 回覆 API (保留原本) ---
 app.post("/ai/reply", async (req, res) => {
   const { message, aiName } = req.body;
   if (!message || !aiName) return res.status(400).json({ error: "缺少參數" });
@@ -59,13 +110,10 @@ app.post("/ai/reply", async (req, res) => {
   res.json({ reply });
 });
 
-// --- AI 呼叫函數（改進版） ---
+// --- AI 呼叫函數（與你原本一致，可保留或替換） ---
 async function callAI(userMessage, aiName) {
   const p = aiProfiles[aiName] || { style: "中性", desc: "" };
-  
-  // 動態 max_tokens：訊息長度小於 20，max 30；長訊息可到 60
   const maxLen = userMessage.length < 20 ? 30 : 60;
-
   try {
     const response = await fetch('http://220.135.33.190:11434/v1/completions', {
       method: 'POST',
@@ -74,36 +122,64 @@ async function callAI(userMessage, aiName) {
         model: "llama3",
         prompt: `你是一名叫「${aiName}」的台灣人，個性是：${p.desc}（${p.style}）。
         請用繁體中文回覆，省略廢話跟自我介紹，控制在10~30字內：「${userMessage}」`,
-        //max_tokens: maxLen,
         temperature: 0.8
       })
     });
 
     const data = await response.json();
     return (data.completion || data.choices?.[0]?.text || "嗯～").trim();
-  } catch {
+  } catch (e) {
+    console.error("callAI error:", e);
     return "我剛剛又 Lag 了一下哈哈。";
   }
 }
 
-// --- 聊天室 ---
+// --- 聊天室 (使用 socket.io middleware 驗證 token 為可選) ---
+
+// Optional: 驗證 socket token（如果前端傳 token）
+// 如果你不想啟用 socket 驗證，把下面 io.use 的內容註解掉或刪除。
+io.use(async (socket, next) => {
+  try {
+    const token = socket.handshake.auth?.token;
+    if (!token) {
+      // 不強制驗證：允許無 token 之連線（若你想強制驗證，把這一行改成 return next(new Error("no token")))
+      return next();
+    }
+    const g = await findGuestByToken(token);
+    if (!g) {
+      // token 不存在時允許但把 name 設成臨時訪客（你也可以拒絕連線）
+      socket.data.guest = null;
+      return next();
+    }
+    socket.data.guest = g; // { guest_token, name }
+    return next();
+  } catch (err) {
+    console.error("socket auth error", err);
+    return next();
+  }
+});
+
 const rooms = {};      // room -> [{ id, name, type }]
 const roomContext = {}; // room -> [{ user, text }]
 const aiTimers = {};    // room -> timer
 
 io.on("connection", socket => {
+  // 由前端 emit joinRoom 時傳入 { room, user: { name, token? } }
   socket.on("joinRoom", ({ room, user }) => {
     socket.join(room);
-    socket.data = { room, name: user.name };
+    const nameFromToken = socket.data.guest?.name;
+    const finalName = nameFromToken || user?.name || ("訪客" + Math.floor(Math.random() * 999));
+    socket.data = { room, name: finalName };
 
     if (!rooms[room]) rooms[room] = [];
-    if (!rooms[room].find(u => u.name === user.name)) rooms[room].push({ id: socket.id, name: user.name, type: "guest" });
+    if (!rooms[room].find(u => u.name === finalName)) rooms[room].push({ id: socket.id, name: finalName, type: "guest" });
+
     aiNames.forEach(ai => {
       if (!rooms[room].find(u => u.name === ai)) rooms[room].push({ id: ai, name: ai, type: "AI" });
     });
     if (!roomContext[room]) roomContext[room] = [];
 
-    io.to(room).emit("systemMessage", `${user.name} 加入房間`);
+    io.to(room).emit("systemMessage", `${finalName} 加入房間`);
     io.to(room).emit("updateUsers", rooms[room]);
 
     startAIAutoTalk(room);
@@ -111,6 +187,7 @@ io.on("connection", socket => {
 
   socket.on("message", async ({ room, message, user, target }) => {
     io.to(room).emit("message", { user, message, target });
+    if (!roomContext[room]) roomContext[room] = [];
     roomContext[room].push({ user: user.name, text: message });
     if (roomContext[room].length > 20) roomContext[room].shift();
 
@@ -123,19 +200,20 @@ io.on("connection", socket => {
   });
 
   const removeUser = () => {
-    const { room, name } = socket.data;
+    const { room, name } = socket.data || {};
     if (!room || !rooms[room]) return;
-    rooms[room] = rooms[room].filter(u => u.id !== socket.id);
+    rooms[room] = rooms[room].filter(u => u.id !== socket.id && u.name !== name);
     socket.leave(room);
-    io.to(room).emit("systemMessage", `${name} 離開房間`);
-    io.to(room).emit("updateUsers", rooms[room]);
+    if (name) {
+      io.to(room).emit("systemMessage", `${name} 離開房間`);
+      io.to(room).emit("updateUsers", rooms[room]);
+    }
   };
 
   socket.on("leaveRoom", removeUser);
   socket.on("disconnect", removeUser);
 });
 
-// --- AI 自動聊天 ---
 function startAIAutoTalk(room) {
   if (aiTimers[room]) return;
 
@@ -144,10 +222,10 @@ function startAIAutoTalk(room) {
     if (!aiList.length) return;
 
     const speaker = aiList[Math.floor(Math.random() * aiList.length)];
-    const lastContext = roomContext[room] || [];
     const reply = await callAI("繼續延續話題但不要提到我們正在延續話題這幾個字", speaker.name);
 
     io.to(room).emit("message", { user: { name: speaker.name }, message: reply });
+    if (!roomContext[room]) roomContext[room] = [];
     roomContext[room].push({ user: speaker.name, text: reply });
     if (roomContext[room].length > 20) roomContext[room].shift();
 
