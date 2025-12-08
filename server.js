@@ -110,7 +110,7 @@ app.post("/ai/reply", async (req, res) => {
 // ---------------- AI 呼叫函數 ----------------
 async function callAI(userMessage, aiName, roomContext = [], mode = "reply") {
   const p = aiProfiles[aiName] || { style: "中性", desc: "" };
-  let maxLen = mode === "reply" ? 40 : 20;
+  let maxLen = mode === "reply" ? 40 : 25;
 
   let prompt = "";
   if(mode === "reply") {
@@ -125,7 +125,7 @@ async function callAI(userMessage, aiName, roomContext = [], mode = "reply") {
 你是一名叫「${aiName}」的台灣人，個性是：${p.desc}（${p.style}）。
 房間最近的聊天內容如下：
 ${roomContext.map(c => `${c.user}：${c.text}`).join("\n")}
-請延續話題，自我發言，字數 10~20 字，語氣自然。
+請延續話題，自我發言，字數 10~25 字，語氣自然。
 禁止出現 AI 簡體 或英文。
     `;
   }
