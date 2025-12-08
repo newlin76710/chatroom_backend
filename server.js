@@ -107,7 +107,8 @@ async function callAI(message, personality) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: "llama3",
+        //model: "llama3",
+        model: "qwen2.5",
         prompt: systemPrompt,
         max_tokens: 60,
         temperature: 0.7
@@ -118,16 +119,16 @@ async function callAI(message, personality) {
 
     if (!res.ok) {
       console.error('Ollama API error', res.status, await res.text());
-      return '對方回覆失敗，請稍後或等等再試。';
+      return '安安很高興認識你，我是'+personality+'。';
     }
 
     const data = await res.json();
-    const reply = data.completion || data.choices?.[0]?.text || '對方回覆失敗，請稍後或再試試。';
+    const reply = data.completion || data.choices?.[0]?.text || '安安你好，我是'+personality+'。';
     return reply.trim();
 
   } catch (err) {
     console.error('callAI error', err);
-    return '對方回覆失敗，請稍後重新嘗試。';
+    return '安安，我是'+personality+'。';
   }
 }
 
