@@ -74,7 +74,7 @@ async function callAI(userMessage, aiName) {
         model: "llama3",
         prompt: `你是一名叫「${aiName}」的台灣人，個性是：${p.desc}（${p.style}）。
         請用繁體中文回覆，省略廢話跟自我介紹，控制在10~30字內：「${userMessage}」`,
-        max_tokens: maxLen,
+        //max_tokens: maxLen,
         temperature: 0.8
       })
     });
