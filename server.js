@@ -6,6 +6,7 @@ import dotenv from 'dotenv';
 import cors from 'cors';
 import crypto from 'crypto';
 import pkg from 'pg';
+import bcrypt from "bcryptjs";
 const { Pool } = pkg;
 
 dotenv.config();
