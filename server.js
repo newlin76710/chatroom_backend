@@ -7,6 +7,7 @@ import cors from 'cors';
 import crypto from 'crypto';
 import pkg from 'pg';
 import bcrypt from "bcryptjs";
+import fetch from "node-fetch";
 const { Pool } = pkg;
 
 dotenv.config();
@@ -46,7 +47,7 @@ const io = new Server(server, { cors: { origin: "*" } });
 app.use(cors());
 app.use(express.json());
 
-// ---------- Helper ----------
+// --- Helper Functions ---
 async function createGuest() {
   const token = crypto.randomUUID();
   const name = "訪客 " + Math.floor(1000 + Math.random() * 9000);
@@ -58,16 +59,16 @@ async function createGuest() {
   return { guestToken: token, name, level };
 }
 
+// 查找訪客
 async function findGuestByToken(token) {
-  const r = await pool.query("SELECT guest_token, name, level FROM guest_users WHERE guest_token = $1", [token]);
+  const r = await pool.query(
+    "SELECT guest_token, name, level FROM guest_users WHERE guest_token = $1",
+    [token]
+  );
   return r.rows[0] || null;
 }
 
-// -----------------
 // --- 帳號系統 ---
-// -----------------
-
-// 訪客登入
 app.post("/auth/guest", async (req, res) => {
   try {
     const guest = await createGuest();
@@ -78,7 +79,6 @@ app.post("/auth/guest", async (req, res) => {
   }
 });
 
-// 帳號註冊
 app.post("/auth/register", async (req, res) => {
   try {
     const { username, password } = req.body;
@@ -89,7 +89,6 @@ app.post("/auth/register", async (req, res) => {
 
     const hash = await bcrypt.hash(password, 10);
     await pool.query(`INSERT INTO users (username, password, level) VALUES ($1, $2, $3)`, [username, hash, 1]);
-
     res.json({ message: "註冊成功" });
   } catch (e) {
     console.error(e);
@@ -97,7 +96,6 @@ app.post("/auth/register", async (req, res) => {
   }
 });
 
-// 帳號登入
 app.post("/auth/login", async (req, res) => {
   try {
     const { username, password } = req.body;
@@ -118,37 +116,38 @@ app.post("/auth/login", async (req, res) => {
   }
 });
 
-// --- AI 回覆 API ---
-app.post("/ai/reply", async (req, res) => {
-  const { message, aiName } = req.body;
-  if (!message || !aiName) return res.status(400).json({ error: "缺少參數" });
-  const reply = await callAI(message, aiName);
-  res.json({ reply });
-});
-
-// --- AI 呼叫函數 ---
+// --- AI 回覆 ---
 async function callAI(userMessage, aiName) {
   const p = aiProfiles[aiName] || { style: "中性", desc: "", level: 99 };
   try {
-    const response = await fetch('http://220.135.33.190:11434/v1/completions', {
-      method: 'POST',
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: "llama3",
-        prompt: `你是一名叫「${aiName}」的台灣人，個性是：${p.desc}（${p.style}）。請用繁體中文回覆，省略廢話跟自我介紹，控制在10~30字內：「${userMessage}」`,
-        temperature: 0.8
-      })
-    });
-    const data = await response.json();
-    return (data.completion || data.choices?.[0]?.text || "嗯～").trim();
+    // 模擬簡單 AI 回覆
+    return `${aiName} 回覆: ${userMessage.slice(0, 20)}`;
   } catch (e) {
-    console.error("callAI error:", e);
+    console.error(e);
     return "我剛剛又 Lag 了一下哈哈。";
   }
 }
 
-// --- Socket.io 聊天室 ---
+// --- Chat 系統 ---
+const rooms = {};
+const roomContext = {};
+const aiTimers = {};
+const songQueue = {};
+const currentSong = {};
+
+function parseYouTubeId(url) {
+  const reg = /(?:v=|\/)([0-9A-Za-z_-]{11})/;
+  const match = url.match(reg);
+  return match ? match[1] : null;
+}
+
+// 模擬搜尋 YouTube
+async function searchYouTube(keyword) {
+  return { id: "dQw4w9WgXcQ", title: keyword };
+}
+
 io.on("connection", socket => {
+
   socket.on("joinRoom", ({ room, user }) => {
     socket.join(room);
     const name = user.name || ("訪客" + Math.floor(Math.random() * 999));
@@ -157,12 +156,12 @@ io.on("connection", socket => {
 
     if (!rooms[room]) rooms[room] = [];
     if (!rooms[room].find(u => u.name === name))
-      rooms[room].push({ id: socket.id, name, type: "guest", level });
+      rooms[room].push({ id: socket.id, name, type: user.type || "guest", level });
 
-    // AI 使用者
+    // 加入 AI
     aiNames.forEach(ai => {
       if (!rooms[room].find(u => u.name === ai))
-        rooms[room].push({ id: ai, name: ai, type: "AI", level: aiProfiles[ai]?.level || 99 });
+        rooms[room].push({ id: ai, name: ai, type: "AI", level: aiProfiles[ai].level });
     });
 
     if (!roomContext[room]) roomContext[room] = [];
@@ -187,6 +186,40 @@ io.on("connection", socket => {
     }
   });
 
+  // 點歌
+  socket.on("songRequest", async ({ user, text }) => {
+    const room = socket.data.room;
+    if (!room) return;
+    if (!songQueue[room]) songQueue[room] = [];
+
+    let videoId = parseYouTubeId(text);
+    let title = "未知歌曲";
+    if (!videoId) {
+      const info = await searchYouTube(text);
+      videoId = info.id;
+      title = info.title;
+    } else {
+      title = "影片分享";
+    }
+
+    const video = { user, title, id: videoId };
+    songQueue[room].push(video);
+    io.to(room).emit("updateQueue", songQueue[room]);
+
+    if (!currentSong[room]) playNextSong(room);
+  });
+
+  function playNextSong(room) {
+    if (!songQueue[room] || !songQueue[room].length) {
+      currentSong[room] = null;
+      return;
+    }
+    currentSong[room] = songQueue[room].shift();
+    io.to(room).emit("playSong", currentSong[room]);
+    io.to(room).emit("updateQueue", songQueue[room]);
+    setTimeout(() => playNextSong(room), 180000); // 3分鐘自動下一首
+  }
+
   const removeUser = () => {
     const { room, name } = socket.data || {};
     if (!room || !rooms[room]) return;
@@ -203,10 +236,6 @@ io.on("connection", socket => {
 });
 
 // --- AI 自動對話 ---
-const rooms = {};
-const roomContext = {};
-const aiTimers = {};
-
 function startAIAutoTalk(room) {
   if (aiTimers[room]) return;
 
@@ -215,7 +244,7 @@ function startAIAutoTalk(room) {
     if (!aiList.length) return;
 
     const speaker = aiList[Math.floor(Math.random() * aiList.length)];
-    const reply = await callAI("繼續延續話題但不要提到我們正在延續話題這幾個字", speaker.name);
+    const reply = await callAI("延續話題", speaker.name);
 
     io.to(room).emit("message", { user: { name: speaker.name }, message: reply });
     if (!roomContext[room]) roomContext[room] = [];
