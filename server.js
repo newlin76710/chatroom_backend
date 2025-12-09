@@ -1,4 +1,3 @@
-// server.js
 import express from 'express';
 import http from 'http';
 import { Server } from 'socket.io';
@@ -147,12 +146,11 @@ async function callAI(userMessage, aiName) {
   }
 }
 
-// --- Socket.io 聊天室 & 點歌系統 ---
+// --- Socket.io 聊天室 ---
 const rooms = {};
 const roomContext = {};
 const aiTimers = {};
-const songQueues = {}; // room: [ { user, text } ]
-const currentSongs = {}; // room: current song
+const videoState = {}; // room -> { currentVideo, queue }
 
 io.on("connection", socket => {
   socket.on("joinRoom", ({ room, user }) => {
@@ -172,10 +170,12 @@ io.on("connection", socket => {
     });
 
     if (!roomContext[room]) roomContext[room] = [];
-    if (!songQueues[room]) songQueues[room] = [];
+    if (!videoState[room]) videoState[room] = { currentVideo: null, queue: [] };
 
     io.to(room).emit("systemMessage", `${name} 加入房間`);
     io.to(room).emit("updateUsers", rooms[room]);
+    io.to(room).emit("videoUpdate", videoState[room].currentVideo);
+    io.to(room).emit("videoQueueUpdate", videoState[room].queue);
 
     startAIAutoTalk(room);
   });
@@ -194,34 +194,14 @@ io.on("connection", socket => {
     }
   });
 
-  // 點歌請求
-  socket.on("songRequest", ({ user, text }) => {
-    const { room } = socket.data;
-    if (!songQueues[room]) songQueues[room] = [];
-    const song = { user, text };
-    songQueues[room].push(song);
-
-    io.to(room).emit("songListUpdate", songQueues[room]);
-
-    // 若沒歌正在播放，自動播放
-    if (!currentSongs[room]) playNextSong(room);
+  socket.on("playVideo", ({ room, url, user }) => {
+    if (!videoState[room]) videoState[room] = { currentVideo: null, queue: [] };
+    const video = { url, user };
+    videoState[room].currentVideo = video;
+    videoState[room].queue.push(video);
+    io.to(room).emit("videoUpdate", video);
+    io.to(room).emit("videoQueueUpdate", videoState[room].queue);
   });
-
-  function playNextSong(room) {
-    const queue = songQueues[room];
-    if (!queue || !queue.length) {
-      currentSongs[room] = null;
-      io.to(room).emit("songPlay", null);
-      return;
-    }
-    const next = queue.shift();
-    currentSongs[room] = next;
-    io.to(room).emit("songPlay", next);
-    io.to(room).emit("songListUpdate", queue);
-
-    // 模擬播放時間：30秒後自動播放下一首
-    setTimeout(() => playNextSong(room), 30000);
-  }
 
   const removeUser = () => {
     const { room, name } = socket.data || {};
@@ -261,5 +241,5 @@ function startAIAutoTalk(room) {
 }
 
 // --- Server ---
-const port = process.env.PORT || 3000;
+const port = process.env.PORT || 10000;
 server.listen(port, () => console.log(`Server running on port ${port}`));
