@@ -323,10 +323,10 @@ function playNextSong(room) {
   state.scores = [];
   io.to(room).emit("playSong", state.current); // 播放歌曲通知前端
 
-  // 偵聽前端播放完事件，開始倒數 90 秒評分
+  // 偵聽前端播放完事件，開始倒數 30 秒評分
   if (state.timer) clearTimeout(state.timer);
   state.timer = setTimeout(() => {
-    // 歌曲播完後 90 秒倒數
+    // 歌曲播完後 30 秒倒數
     if (state.scoreTimer) clearTimeout(state.scoreTimer);
     state.scoreTimer = setTimeout(async () => {
       const scores = state.scores;
@@ -345,7 +345,7 @@ function playNextSong(room) {
 
       // 播放下一首
       playNextSong(room);
-    }, 90000); // 90 秒倒數
+    }, 30000); // 30 秒倒數
   }, 0); // 0 代表前端會先播放歌曲，再用 audio onEnded 通知
 }
 
