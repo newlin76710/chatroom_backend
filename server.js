@@ -151,6 +151,8 @@ const rooms = {};
 const roomContext = {};
 const aiTimers = {};
 const videoState = {}; // room -> { currentVideo, queue }
+const songState = {};
+// room -> { singer, songUrl, scores: { socketId: score } }
 
 io.on("connection", socket => {
   socket.on("joinRoom", ({ room, user }) => {
@@ -222,6 +224,44 @@ io.on("connection", socket => {
       roomContext[room].push({ user: target, text: reply });
       if (roomContext[room].length > 20) roomContext[room].shift();
     }
+  });
+  // --- 🎤 唱歌開始 ---
+  socket.on("startSong", ({ room, singer, songUrl }) => {
+    songState[room] = {
+      singer,
+      songUrl,
+      scores: {}
+    };
+
+    io.to(room).emit("playSong", {
+      singer,
+      songUrl
+    });
+  });
+
+  // --- ⭐ 評分 ---
+  socket.on("scoreSong", ({ room, score }) => {
+    if (!songState[room]) return;
+    songState[room].scores[socket.id] = score;
+  });
+
+  // --- 🏁 結束唱歌 ---
+  socket.on("endSong", ({ room }) => {
+    const state = songState[room];
+    if (!state) return;
+
+    const scores = Object.values(state.scores);
+    const avg = scores.length
+      ? (scores.reduce((a, b) => a + b, 0) / scores.length).toFixed(2)
+      : "0.00";
+
+    io.to(room).emit("songResult", {
+      singer: state.singer,
+      avg,
+      count: scores.length
+    });
+
+    delete songState[room];
   });
 
   socket.on("playVideo", ({ room, url, user }) => {
