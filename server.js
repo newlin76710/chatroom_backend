@@ -272,14 +272,10 @@ io.on("connection", socket => {
   });
 
   // --- 歌唱狀態 ---
-  // 使用者開始唱歌 → 加入隊列
+  // 新增歌曲
   socket.on("startSong", ({ room, singer, songUrl }) => {
-    if (!songState[room]) songState[room] = { queue: [], current: null, scores: [], timer: null };
-
-    // 加入隊列
+    if (!songState[room]) songState[room] = { queue: [], current: null, scores: [], timer: null, scoreTimer: null };
     songState[room].queue.push({ singer, url: songUrl });
-
-    // 如果沒有正在播放的歌，立即播放下一首
     if (!songState[room].current) playNextSong(room);
   });
 
@@ -289,52 +285,6 @@ io.on("connection", socket => {
     if (!state || !state.current) return;
     state.scores.push(score);
   });
-
-  // 播放下一首
-  function playNextSong(room) {
-    const state = songState[room];
-    if (!state.queue.length) {
-      state.current = null;
-      io.to(room).emit("playSong", null);
-      return;
-    }
-
-    state.current = state.queue.shift();
-    state.scores = [];
-    io.to(room).emit("playSong", state.current);
-
-    const currentSong = { ...state.current }; // 保存當前歌曲資訊
-
-    if (state.timer) clearTimeout(state.timer);
-    state.timer = setTimeout(async () => {
-      const scores = state.scores;
-      const avg = scores.length ? (scores.reduce((a, b) => a + b, 0) / scores.length).toFixed(1) : 0;
-
-      // 公布成績
-      io.to(room).emit("songResult", {
-        singer: currentSong.singer,
-        avg,
-        count: scores.length
-      });
-
-      // AI 歌評（延遲 1.5 秒）
-      setTimeout(async () => {
-        const aiComment = await callAISongComment({ singer: currentSong.singer, avg });
-        io.to(room).emit("message", aiComment);
-      }, 1500);
-
-      // 播放下一首
-      playNextSong(room);
-    }, 90000); // 90 秒後自動結算成績
-  }
-
-  // 使用者送出評分
-  socket.on("scoreSong", ({ room, score }) => {
-    const state = songState[room];
-    if (!state || !state.current) return;
-    state.scores.push(score);
-  });
-
 
   // --- YouTube ---
   socket.on("playVideo", ({ room, url, user }) => {
@@ -360,6 +310,44 @@ io.on("connection", socket => {
   socket.on("leaveRoom", removeUser);
   socket.on("disconnect", removeUser);
 });
+
+function playNextSong(room) {
+  const state = songState[room];
+  if (!state.queue.length) {
+    state.current = null;
+    io.to(room).emit("playSong", null);
+    return;
+  }
+
+  state.current = state.queue.shift();
+  state.scores = [];
+  io.to(room).emit("playSong", state.current); // 播放歌曲通知前端
+
+  // 偵聽前端播放完事件，開始倒數 90 秒評分
+  if (state.timer) clearTimeout(state.timer);
+  state.timer = setTimeout(() => {
+    // 歌曲播完後 90 秒倒數
+    if (state.scoreTimer) clearTimeout(state.scoreTimer);
+    state.scoreTimer = setTimeout(async () => {
+      const scores = state.scores;
+      const avg = scores.length ? (scores.reduce((a, b) => a + b, 0) / scores.length).toFixed(1) : 0;
+
+      // 公布分數
+      io.to(room).emit("songResult", {
+        singer: state.current.singer,
+        avg,
+        count: scores.length
+      });
+
+      // AI 歌評
+      const aiComment = await callAISongComment({ singer: state.current.singer, avg });
+      io.to(room).emit("message", aiComment);
+
+      // 播放下一首
+      playNextSong(room);
+    }, 90000); // 90 秒倒數
+  }, 0); // 0 代表前端會先播放歌曲，再用 audio onEnded 通知
+}
 
 // --- AI 自動對話 ---
 function startAIAutoTalk(room) {
