@@ -95,7 +95,7 @@ app.post("/auth/guest", async (req, res) => {
 // 註冊
 app.post("/auth/register", async (req, res) => {
   try {
-    const { username, password, gender, phone, email } = req.body;
+    const { username, password, gender, phone, email, avatar } = req.body;
 
     if (!username || !password)
       return res.status(400).json({ error: "缺少帳號或密碼" });
@@ -109,24 +109,27 @@ app.post("/auth/register", async (req, res) => {
 
     const hash = await bcrypt.hash(password, 10);
 
-    await pool.query(
-      `INSERT INTO users (username, password, gender, phone, email, level, exp)
-       VALUES ($1, $2, $3, $4, $5, 1, 0)`,
+    const result = await pool.query(
+      `INSERT INTO users (username, password, gender, phone, email, avatar, level, exp)
+       VALUES ($1, $2, $3, $4, $5, $6, 1, 0)
+       RETURNING id, username, gender, avatar, level, exp`,
       [
         username,
         hash,
-        gender === "男" ? "男" : "女", // 中文化
+        gender === "男" ? "男" : "女",
         phone || null,
         email || null,
+        avatar || null
       ]
     );
 
-    res.json({ message: "註冊成功" });
+    res.json({ message: "註冊成功", user: result.rows[0] });
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: "註冊失敗" });
   }
 });
+
 
 // 帳號登入
 app.post("/auth/login", async (req, res) => {
@@ -136,7 +139,7 @@ app.post("/auth/login", async (req, res) => {
       return res.status(400).json({ error: "缺少帳號或密碼" });
 
     const result = await pool.query(
-      `SELECT id, username, password, level, exp FROM users WHERE username=$1`,
+      `SELECT id, username, password, level, exp, avatar FROM users WHERE username=$1`,
       [username]
     );
 
@@ -163,6 +166,7 @@ app.post("/auth/login", async (req, res) => {
       level: user.level,
       exp: user.exp,
       gender: safeGender,
+      avatar: user.avatar,
       last_login: now,
     });
   } catch (e) {
@@ -170,6 +174,7 @@ app.post("/auth/login", async (req, res) => {
     res.status(500).json({ error: "登入失敗" });
   }
 });
+
 
 
 // --- AI 回覆 API ---
