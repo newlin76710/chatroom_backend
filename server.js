@@ -426,19 +426,35 @@ io.on("connection", (socket) => {
     io.to(room).emit("user-start-singing", { singer });
   });
 
-  socket.on("stop-singing", ({ room, singer }) => {
+  socket.on("stop-singing", async ({ room, singer }) => {
     if (songState[room].currentSinger !== singer) return;
+
+    // 結束唱歌
     songState[room].currentSinger = null;
     io.to(room).emit("user-stop-singing", { singer });
 
-    // 評分倒數 15 秒
+    // 開始 15 秒評分倒數
     songState[room].scores = [];
     io.to(room).emit("startScoreCountdown", { duration: 15 });
 
-    songState[room].scoreTimer = setTimeout(() => {
+    songState[room].scoreTimer = setTimeout(async () => {
       const scores = songState[room].scores;
-      const avg = scores.length ? Math.round(scores.reduce((a,b)=>a+b,0)/scores.length) : 0;
-      io.to(room).emit("songResult", { singer, avg, count: scores.length });
+      const avg = scores.length ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : 0;
+
+      // 呼叫 AI 歌評
+      const aiCommentMsg = await callAISongComment({ singer, avg });
+
+      // 廣播結果給房間
+      io.to(room).emit("songResult", {
+        singer,
+        avg,
+        count: scores.length,
+        aiComment: aiCommentMsg.message
+      });
+
+      // AI 發訊息（可選，放在聊天裡）
+      io.to(room).emit("message", aiCommentMsg);
+
       songState[room].scoreTimer = null;
     }, 15000);
   });
