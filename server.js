@@ -429,7 +429,6 @@ io.on("connection", (socket) => {
   socket.on("stop-singing", async ({ room, singer }) => {
     if (songState[room].currentSinger !== singer) return;
 
-    // 結束唱歌
     songState[room].currentSinger = null;
     io.to(room).emit("user-stop-singing", { singer });
 
@@ -441,19 +440,14 @@ io.on("connection", (socket) => {
       const scores = songState[room].scores;
       const avg = scores.length ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : 0;
 
-      // 呼叫 AI 歌評
-      const aiCommentMsg = await callAISongComment({ singer, avg });
+      // 呼叫 AI 評語
+      const aiComment = await callAISongComment({ singer, avg });
 
-      // 廣播結果給房間
-      io.to(room).emit("songResult", {
-        singer,
-        avg,
-        count: scores.length,
-        aiComment: aiCommentMsg.message
-      });
+      // 廣播結果與 AI 評語到訊息列表
+      io.to(room).emit("songResult", { singer, avg, count: scores.length, aiComment: aiComment.message });
 
-      // AI 發訊息（可選，放在聊天裡）
-      io.to(room).emit("message", aiCommentMsg);
+      // 同時作為訊息廣播給聊天室
+      io.to(room).emit("message", aiComment);
 
       songState[room].scoreTimer = null;
     }, 15000);
