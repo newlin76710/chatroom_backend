@@ -280,19 +280,23 @@ const songState = {};  // songState[room] = { queue: [{singer, url}], current: {
 const displayQueue = {};
 // room -> [{ type: "song" | "video", name, title }]
 
-io.on("connection", socket => {
+const rooms = {};          // room -> [ {id, name, type, level, exp, gender, avatar} ]
+const roomContext = {};    // room -> 聊天 context
+const videoState = {};     // room -> { currentVideo, queue }
+const songState = {};      // room -> { currentSinger, scores, scoreTimer }
+const displayQueue = {};   // room -> [{ type: "song"|"video", name, title }]
+
+io.on("connection", (socket) => {
+  // --- 加入房間 ---
   socket.on("joinRoom", async ({ room, user }) => {
     socket.join(room);
 
-    // --- 預設值 ---
+    // 預設值
     let name = user.name || "訪客" + Math.floor(Math.random() * 999);
-    let level = 1;
-    let exp = 0;
-    let gender = "女";
-    let avatar = "/avatars/g01.gif"; // 預設頭像
+    let level = 1, exp = 0, gender = "女", avatar = "/avatars/g01.gif";
     let type = user.type || "guest";
 
-    // --- 從資料庫取得使用者資料 (account 或 guest) ---
+    // 從資料庫取得使用者資料
     try {
       const res = await pool.query(
         `SELECT username, level, exp, gender, avatar FROM users WHERE username=$1`,
@@ -305,22 +309,21 @@ io.on("connection", socket => {
         exp = dbUser.exp || 0;
         gender = dbUser.gender || "女";
         avatar = dbUser.avatar || avatar;
-        type = type === "account" ? "account" : type; // 確保已註冊帳號是 account
+        type = type === "account" ? "account" : type;
       }
     } catch (err) {
       console.error("Socket joinRoom 取得使用者資料錯誤：", err);
     }
 
-    // --- 將資料存到 socket 上方便後續使用 ---
     socket.data = { room, name, level, gender, avatar, type };
 
-    // --- 房間使用者列表 ---
+    // 房間使用者列表
     if (!rooms[room]) rooms[room] = [];
     if (!rooms[room].find(u => u.name === name)) {
       rooms[room].push({ id: socket.id, name, type, level, exp, gender, avatar });
     }
 
-    // --- 加入 AI 使用者 ---
+    // 加入 AI 使用者
     aiNames.forEach(ai => {
       if (!rooms[room].find(u => u.name === ai)) {
         rooms[room].push({
@@ -329,25 +332,27 @@ io.on("connection", socket => {
           type: "AI",
           level: aiProfiles[ai]?.level || 99,
           gender: aiProfiles[ai]?.gender || "女",
-          avatar: aiProfiles[ai]?.avatar || null, // <- 保留原本設定
+          avatar: aiProfiles[ai]?.avatar || null,
         });
       }
     });
 
-    // --- 初始化房間 context & video state ---
+    // 初始化 room context / video / song state
     if (!roomContext[room]) roomContext[room] = [];
     if (!videoState[room]) videoState[room] = { currentVideo: null, queue: [] };
+    if (!songState[room]) songState[room] = { currentSinger: null, scores: [], scoreTimer: null };
 
-    // --- 廣播訊息與使用者列表 ---
+    // 廣播房間狀態
+    io.to(room).emit("updateSingingStatus", { currentSinger: songState[room].currentSinger });
     io.to(room).emit("systemMessage", `${name} 加入房間`);
     io.to(room).emit("updateUsers", rooms[room]);
     io.to(room).emit("videoUpdate", videoState[room].currentVideo);
     io.to(room).emit("videoQueueUpdate", videoState[room].queue);
 
-    // --- 啟動 AI 自動對話 ---
     startAIAutoTalk(room);
   });
 
+  // --- 聊天訊息 ---
   socket.on("message", async ({ room, message, user, target, mode }) => {
     if (!roomContext[room]) roomContext[room] = [];
     roomContext[room].push({ user: user.name, text: message });
@@ -355,36 +360,26 @@ io.on("connection", socket => {
 
     const msgPayload = { user, message, target: target || "", mode };
 
+    // 更新 EXP / LV
     try {
-      // 取得使用者資料
       const res = await pool.query(
         `SELECT id, level, exp, gender, avatar, account_type FROM users WHERE username=$1`,
         [user.name]
       );
-      let dbUser = res.rows[0];
-
+      const dbUser = res.rows[0];
       if (dbUser) {
         let { level, exp, gender, avatar, account_type } = dbUser;
-        exp += 5; // 發訊息 +5 EXP
-
-        // 判斷升級
+        exp += 5;
         while (exp >= expForNextLevel(level)) {
           exp -= expForNextLevel(level);
           level += 1;
         }
-
-        // 更新資料庫
-        await pool.query(
-          `UPDATE users SET level=$1, exp=$2 WHERE id=$3`,
-          [level, exp, dbUser.id]
-        );
-
-        // 更新 rooms[room] 裡的使用者資料
+        await pool.query(`UPDATE users SET level=$1, exp=$2 WHERE id=$3`, [level, exp, dbUser.id]);
         if (rooms[room]) {
           const roomUser = rooms[room].find(u => u.name === user.name);
           if (roomUser) {
-            roomUser.exp = exp;
             roomUser.level = level;
+            roomUser.exp = exp;
             roomUser.gender = gender;
             roomUser.avatar = avatar || roomUser.avatar || "/avatars/g01.gif";
             roomUser.type = account_type || roomUser.type || "guest";
@@ -395,7 +390,7 @@ io.on("connection", socket => {
       console.error("更新 EXP/LV/使用者資料 失敗：", err);
     }
 
-    // --- 廣播訊息 ---
+    // 廣播訊息
     if (mode === "private" && target) {
       const sockets = Array.from(io.sockets.sockets.values());
       sockets.forEach(s => {
@@ -405,12 +400,10 @@ io.on("connection", socket => {
       io.to(room).emit("message", msgPayload);
     }
 
-    // --- 廣播更新使用者 EXP / LV / avatar / type ---
-    if (rooms[room]) {
-      io.to(room).emit("updateUsers", rooms[room]);
-    }
+    // 廣播更新使用者列表
+    if (rooms[room]) io.to(room).emit("updateUsers", rooms[room]);
 
-    // --- AI 回覆 ---
+    // AI 回覆
     if (target && aiProfiles[target]) {
       const reply = await callAI(message, target);
       const aiMsg = { user: { name: target }, message: reply, target: user.name, mode };
@@ -426,107 +419,83 @@ io.on("connection", socket => {
     }
   });
 
-  // 給前端取得房間內其他使用者
+  // --- 取得房間使用者 ---
   socket.on("getRoomUsers", (room, callback) => {
     const users = (rooms[room] || []).filter(u => u.id !== socket.id);
     callback(users);
   });
-  // --- 歌唱狀態 ---
-  // --- 即時語音廣播 ---
-  // 開始唱歌
-  // WebRTC 信令
-  socket.on("offer", ({ offer, to }) => {
-    io.to(to).emit("offer", { offer, from: socket.id });
-  });
 
-  socket.on("answer", ({ answer, to }) => {
-    io.to(to).emit("answer", { answer, from: socket.id });
-  });
-
-  socket.on("ice-candidate", ({ candidate, to }) => {
-    io.to(to).emit("ice-candidate", { candidate, from: socket.id });
-  });
-
-  // --- 歌唱狀態 ---
+  // --- 唱歌狀態 ---
   socket.on("start-singing", ({ room, singer }) => {
-    if (!singingState[room]) singingState[room] = { singer: null, queue: [] };
-
-    if (singingState[room].singer) {
-      // 有人正在唱，排隊
-      singingState[room].queue.push({ singer, socketId: socket.id });
-      socket.emit("waitForTurn"); // 告訴使用者排隊
-      return;
-    }
-
-    // 沒人唱，直接開始
-    singingState[room].singer = singer;
-    socket.data.isSinging = true;
+    if (songState[room].currentSinger) return; // 已有人唱歌
+    songState[room].currentSinger = singer;
     io.to(room).emit("user-start-singing", { singer });
   });
 
   socket.on("stop-singing", ({ room, singer }) => {
-    socket.data.isSinging = false;
+    if (songState[room].currentSinger !== singer) return;
+    songState[room].currentSinger = null;
     io.to(room).emit("user-stop-singing", { singer });
 
-    // 開始倒數評分
-    io.to(room).emit("startScoreCountdown");
+    // 評分倒數 15 秒
+    songState[room].scores = [];
+    io.to(room).emit("startScoreCountdown", { duration: 15 });
 
-    // 下一個排隊的人
-    const next = singingState[room].queue.shift();
-    singingState[room].singer = null;
-
-    if (next) {
-      io.to(next.socketId).emit("yourTurn"); // 告訴下一個人可以開始唱歌
-    }
-  });
-  // 新增歌曲
-  socket.on("startSong", ({ room, singer, songUrl }) => {
-    if (!displayQueue[room]) displayQueue[room] = [];
-
-    displayQueue[room].push({
-      type: "song",
-      name: singer,
-      title: "演唱歌曲"
-    });
-
-    io.to(room).emit("displayQueueUpdate", displayQueue[room]);
-    if (!songState[room]) songState[room] = { queue: [], current: null, scores: [], timer: null, scoreTimer: null };
-    songState[room].queue.push({ singer, url: songUrl });
-    if (!songState[room].current) playNextSong(room);
+    songState[room].scoreTimer = setTimeout(() => {
+      const scores = songState[room].scores;
+      const avg = scores.length ? Math.round(scores.reduce((a,b)=>a+b,0)/scores.length) : 0;
+      io.to(room).emit("songResult", { singer, avg, count: scores.length });
+      songState[room].scoreTimer = null;
+    }, 15000);
   });
 
-  // 評分
   socket.on("scoreSong", ({ room, score }) => {
-    const state = songState[room];
-    if (!state || !state.current) return;
-    state.scores.push(score);
+    if (!songState[room]) return;
+    songState[room].scores.push(score);
+  });
+
+  // --- WebRTC 信令 ---
+  socket.on("webrtc-offer", ({ room, offer }) => socket.to(room).emit("webrtc-offer", { offer, sender: socket.data.name }));
+  socket.on("webrtc-answer", ({ room, answer, to }) => {
+    const target = Array.from(io.sockets.sockets.values()).find(s => s.data.name === to);
+    if (target) target.emit("webrtc-answer", { answer });
+  });
+  socket.on("webrtc-candidate", ({ room, candidate, to }) => {
+    if (to) {
+      const target = Array.from(io.sockets.sockets.values()).find(s => s.data.name === to);
+      if (target) target.emit("webrtc-candidate", { candidate });
+    } else socket.to(room).emit("webrtc-candidate", { candidate });
   });
 
   // --- YouTube ---
   socket.on("playVideo", ({ room, url, user }) => {
     if (!displayQueue[room]) displayQueue[room] = [];
+    displayQueue[room].push({ type: "video", name: user?.name || "訪客", title: "點播影片" });
 
-    displayQueue[room].push({
-      type: "video",
-      name: user?.name || "訪客",
-      title: "點播影片"
-    });
-
-    io.to(room).emit("displayQueueUpdate", displayQueue[room]);
     if (!videoState[room]) videoState[room] = { currentVideo: null, queue: [] };
     const video = { url, user };
     videoState[room].currentVideo = video;
     videoState[room].queue.push(video);
+
+    io.to(room).emit("displayQueueUpdate", displayQueue[room]);
     io.to(room).emit("videoUpdate", video);
     io.to(room).emit("videoQueueUpdate", videoState[room].queue);
   });
 
+  // --- 離開房間 / 斷線 ---
   const removeUser = () => {
     const { room, name } = socket.data || {};
     if (!room || !rooms[room]) return;
     rooms[room] = rooms[room].filter(u => u.id !== socket.id && u.name !== name);
     socket.leave(room);
+
     if (name) {
+      if (songState[room]?.currentSinger === name) {
+        clearTimeout(songState[room].scoreTimer);
+        songState[room].currentSinger = null;
+        songState[room].scoreTimer = null;
+        io.to(room).emit("user-stop-singing", { singer: name });
+      }
       io.to(room).emit("systemMessage", `${name} 離開房間`);
       io.to(room).emit("updateUsers", rooms[room]);
     }
