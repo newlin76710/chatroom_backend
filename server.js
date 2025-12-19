@@ -280,12 +280,6 @@ const songState = {};  // songState[room] = { queue: [{singer, url}], current: {
 const displayQueue = {};
 // room -> [{ type: "song" | "video", name, title }]
 
-const rooms = {};          // room -> [ {id, name, type, level, exp, gender, avatar} ]
-const roomContext = {};    // room -> 聊天 context
-const videoState = {};     // room -> { currentVideo, queue }
-const songState = {};      // room -> { currentSinger, scores, scoreTimer }
-const displayQueue = {};   // room -> [{ type: "song"|"video", name, title }]
-
 io.on("connection", (socket) => {
   // --- 加入房間 ---
   socket.on("joinRoom", async ({ room, user }) => {
