@@ -449,14 +449,35 @@ io.on("connection", socket => {
 
   // --- 歌唱狀態 ---
   socket.on("start-singing", ({ room, singer }) => {
+    if (!singingState[room]) singingState[room] = { singer: null, queue: [] };
+
+    if (singingState[room].singer) {
+      // 有人正在唱，排隊
+      singingState[room].queue.push({ singer, socketId: socket.id });
+      socket.emit("waitForTurn"); // 告訴使用者排隊
+      return;
+    }
+
+    // 沒人唱，直接開始
+    singingState[room].singer = singer;
     socket.data.isSinging = true;
-    socket.data.singer = singer;
     io.to(room).emit("user-start-singing", { singer });
   });
 
   socket.on("stop-singing", ({ room, singer }) => {
     socket.data.isSinging = false;
     io.to(room).emit("user-stop-singing", { singer });
+
+    // 開始倒數評分
+    io.to(room).emit("startScoreCountdown");
+
+    // 下一個排隊的人
+    const next = singingState[room].queue.shift();
+    singingState[room].singer = null;
+
+    if (next) {
+      io.to(next.socketId).emit("yourTurn"); // 告訴下一個人可以開始唱歌
+    }
   });
   // 新增歌曲
   socket.on("startSong", ({ room, singer, songUrl }) => {
