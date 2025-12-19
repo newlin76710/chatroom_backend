@@ -212,6 +212,18 @@ app.post("/song/upload", async (req, res) => {
   }
 });
 
+// 計算費氏數列，從第 1 項開始
+function fib(n) {
+  if (n <= 1) return 100; // 等級 1 初始經驗需求 100
+  let a = 100, b = 100; // 可以設定第1、2項都是100
+  for (let i = 2; i <= n; i++) {
+    const next = a + b;
+    a = b;
+    b = next;
+  }
+  return b;
+}
+
 // --- AI 呼叫函數 ---
 async function callAI(userMessage, aiName) {
   const p = aiProfiles[aiName] || { style: "中性", desc: "", level: 99, job: "未知職業" };
@@ -313,6 +325,45 @@ io.on("connection", socket => {
 
     const msgPayload = { user, message, target: target || "", mode };
 
+    // --- 發訊息 + EXP 存 DB ---
+    try {
+      // 取得使用者資料
+      const res = await pool.query(
+        `SELECT id, level, exp FROM users WHERE username=$1`,
+        [user.name]
+      );
+      let dbUser = res.rows[0];
+
+      if (dbUser) {
+        let { level, exp } = dbUser;
+        exp += 5; // +5 EXP
+
+        // 判斷升級
+        while (exp >= fib(level + 1)) {
+          exp -= fib(level + 1);
+          level += 1;
+        }
+
+        // 更新回 DB
+        await pool.query(
+          `UPDATE users SET level=$1, exp=$2 WHERE id=$3`,
+          [level, exp, dbUser.id]
+        );
+
+        // 更新 rooms[room] 裡的使用者資料
+        if (rooms[room]) {
+          const roomUser = rooms[room].find(u => u.name === user.name);
+          if (roomUser) {
+            roomUser.exp = exp;
+            roomUser.level = level;
+          }
+        }
+      }
+    } catch (err) {
+      console.error("更新 EXP/LV 失敗：", err);
+    }
+
+    // --- 廣播訊息 ---
     if (mode === "private" && target) {
       const sockets = Array.from(io.sockets.sockets.values());
       sockets.forEach(s => {
@@ -322,7 +373,10 @@ io.on("connection", socket => {
       io.to(room).emit("message", msgPayload);
     }
 
-    // AI 回覆
+    // --- 廣播更新使用者 EXP / LV ---
+    io.to(room).emit("updateUsers", rooms[room]);
+
+    // --- AI 回覆 ---
     if (target && aiProfiles[target]) {
       const reply = await callAI(message, target);
       const aiMsg = { user: { name: target }, message: reply, target: user.name, mode };
@@ -339,8 +393,6 @@ io.on("connection", socket => {
   });
 
   // --- 歌唱狀態 ---
-
-
   // 新增歌曲
   socket.on("startSong", ({ room, singer, songUrl }) => {
     if (!displayQueue[room]) displayQueue[room] = [];
