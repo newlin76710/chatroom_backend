@@ -212,11 +212,12 @@ app.post("/song/upload", async (req, res) => {
   }
 });
 
-// 計算費氏數列，從第 1 項開始
-function fib(n) {
-  if (n <= 1) return 100; // 等級 1 初始經驗需求 100
-  let a = 100, b = 100; // 可以設定第1、2項都是100
-  for (let i = 2; i <= n; i++) {
+// 等級升級需求費氏數列，從等級1開始
+function expForNextLevel(level) {
+  let a = 100, b = 100;
+  if (level <= 1) return 100;
+
+  for (let i = 2; i <= level; i++) {
     const next = a + b;
     a = b;
     b = next;
@@ -336,19 +337,20 @@ io.on("connection", socket => {
 
       if (dbUser) {
         let { level, exp } = dbUser;
-        exp += 5; // +5 EXP
+        exp += 5; // 發訊息 +5 EXP
 
         // 判斷升級
-        while (exp >= fib(level + 1)) {
-          exp -= fib(level + 1);
+        while (exp >= expForNextLevel(level)) {
+          exp -= expForNextLevel(level);
           level += 1;
         }
 
-        // 更新回 DB
+        // 更新資料庫
         await pool.query(
           `UPDATE users SET level=$1, exp=$2 WHERE id=$3`,
           [level, exp, dbUser.id]
         );
+
 
         // 更新 rooms[room] 裡的使用者資料
         if (rooms[room]) {
