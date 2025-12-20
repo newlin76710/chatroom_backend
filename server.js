@@ -41,11 +41,26 @@ const aiProfiles = {
 const aiNames = Object.keys(aiProfiles);
 
 // --- Express + Socket.io ---
+
+import cors from "cors";
+
 const app = express();
+app.use(cors()); // Express API 也允許跨域
+app.use(express.json({ limit: '50mb' }));
+
 const server = http.createServer(app);
-const io = new Server(server, { cors: { origin: "*" } });
+
+const io = new Server(server, {
+  cors: {
+    origin: ["http://localhost:5173", "https://boygirl.ek21.com"], // 允許前端網址
+    methods: ["GET", "POST"],
+    credentials: true
+  }
+});
+
 const __dirname = new URL('.', import.meta.url).pathname;
 const uploadDir = path.join(__dirname, "uploads", "songs");
+if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
 
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
 
