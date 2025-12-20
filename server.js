@@ -419,55 +419,39 @@ io.on("connection", (socket) => {
     callback(users);
   });
 
-  // --- 唱歌狀態 ---
-  socket.on("stop-singing", ({ room }) => {
-    const state = songState[room];
-    if (!state) return;
+  // --- 歌唱狀態初始化 ---
+  function initSongState(room) {
+    if (!songState[room]) {
+      songState[room] = {
+        currentSinger: null,        // 正在唱歌的人
+        queue: [],                  // 排隊列表
+        listeners: new Set(),       // 已準備聽歌的 socket.id
+        scores: new Map(),          // 評分 Map(socket.id -> score)
+        scoreTimer: null
+      };
+    }
+  }
 
-    const singer = state.currentSinger;
-    if (socket.data?.name !== singer) return;
-
-    state.currentSinger = null;
-    io.to(room).emit("stop-singer", { singer });
-
-    // 開始評分倒數
-    state.scoreTimer = setTimeout(async () => {
-      const scores = Array.from(state.scores.values());
-      const avg = scores.length
-        ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length)
-        : 0;
-
-      // AI 評語
-      const aiComment = await callAISongComment({ singer, avg });
-
-      io.to(room).emit("songResult", {
-        singer,
-        avg,
-        count: scores.length
-      });
-
-      io.to(room).emit("message", aiComment);
-
-      state.scoreTimer = null;
-
-      // 🎯 自動下一位
-      startNextSinger(room);
-    }, 15000);
-  });
-
+  // --- 開始下一位唱歌 ---
   function startNextSinger(room) {
     const state = songState[room];
     if (!state) return;
 
-    const next = state.queue.shift();
-    if (!next) return;
+    if (state.queue.length === 0) {
+      state.currentSinger = null;
+      io.to(room).emit("start-singer", { singer: null });
+      io.to(room).emit("queue-update", { queue: [] });
+      return;
+    }
 
-    state.currentSinger = next;
+    const nextSinger = state.queue.shift();
+    state.currentSinger = nextSinger;
     state.listeners.clear();
     state.scores.clear();
 
     io.to(room).emit("queue-update", { queue: state.queue });
-    io.to(room).emit("start-singer", { singer: next });
+    io.to(room).emit("start-singer", { singer: nextSinger });
+    console.log(`[ROOM ${room}] ${nextSinger} 開始唱歌`);
   }
 
   function cleanupSingerAndQueue(socket) {
@@ -502,29 +486,54 @@ io.on("connection", (socket) => {
 
     state.listeners.add(socket.id);
   });
-  socket.on("join-queue", ({ room, name }) => {
-    if (!songState[room]) {
-      songState[room] = {
-        currentSinger: null,
-        queue: [],
-        listeners: new Set(),
-        scores: new Map(),
-        scoreTimer: null
-      };
-    }
 
+  // --- 加入唱歌排隊 ---
+  socket.on("join-queue", ({ room, name }) => {
+    initSongState(room);
     const state = songState[room];
 
-    if (state.currentSinger === name) return;
-    if (state.queue.includes(name)) return;
+    if (state.queue.includes(name) || state.currentSinger === name) {
+      return; // 已經在隊伍中或正在唱
+    }
 
     state.queue.push(name);
     io.to(room).emit("queue-update", { queue: state.queue });
+    console.log(`[ROOM ${room}] ${name} 加入排隊`, state.queue);
 
-    // 沒人唱就直接輪到第一位
+    // 如果沒人在唱，立即開始
     if (!state.currentSinger) {
       startNextSinger(room);
     }
+  });
+
+  // --- 演唱結束 ---
+  socket.on("stop-singing", ({ room }) => {
+    const state = songState[room];
+    if (!state) return;
+
+    const singer = state.currentSinger;
+    if (socket.data?.name !== singer) return;
+
+    state.currentSinger = null;
+    io.to(room).emit("stop-singer", { singer });
+
+    // 評分倒數 15 秒
+    state.scoreTimer = setTimeout(async () => {
+      const scores = Array.from(state.scores.values());
+      const avg = scores.length
+        ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length)
+        : 0;
+
+      // AI 歌評
+      const aiComment = await callAISongComment({ singer, avg });
+      io.to(room).emit("songResult", { singer, avg, count: scores.length });
+      io.to(room).emit("message", aiComment);
+
+      state.scoreTimer = null;
+
+      // 自動下一位
+      startNextSinger(room);
+    }, 15000);
   });
 
   socket.on("scoreSong", ({ room, score }) => {
