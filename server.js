@@ -469,7 +469,7 @@ io.on("connection", (socket) => {
     io.to(room).emit("queue-update", { queue: state.queue });
     io.to(room).emit("start-singer", { singer: next });
   }
-  
+
   function cleanupSingerAndQueue(socket) {
     const { room, name } = socket.data || {};
     if (!room || !songState[room]) return;
@@ -544,16 +544,29 @@ io.on("connection", (socket) => {
 
 
   // --- WebRTC 信令 ---
-  socket.on("webrtc-offer", ({ room, offer }) => socket.to(room).emit("webrtc-offer", { offer, sender: socket.data.name }));
-  socket.on("webrtc-answer", ({ room, answer, to }) => {
+  // 唱歌者送 offer 給指定聽眾
+  socket.on("webrtc-offer", ({ offer, to }) => {
     const target = Array.from(io.sockets.sockets.values()).find(s => s.data.name === to);
-    if (target) target.emit("webrtc-answer", { answer });
+    if (target) {
+      target.emit("webrtc-offer", { offer, sender: socket.data.name });
+    }
   });
-  socket.on("webrtc-candidate", ({ room, candidate, to }) => {
-    if (to) {
-      const target = Array.from(io.sockets.sockets.values()).find(s => s.data.name === to);
-      if (target) target.emit("webrtc-candidate", { candidate });
-    } else socket.to(room).emit("webrtc-candidate", { candidate });
+
+  // 聽眾回 answer 給唱歌者
+  socket.on("webrtc-answer", ({ answer, to }) => {
+    const target = Array.from(io.sockets.sockets.values()).find(s => s.data.name === to);
+    if (target) {
+      target.emit("webrtc-answer", { answer, sender: socket.data.name });
+    }
+  });
+
+  // ICE candidate 傳送給對應 peer
+  socket.on("webrtc-candidate", ({ candidate, to }) => {
+    if (!to) return;
+    const target = Array.from(io.sockets.sockets.values()).find(s => s.data.name === to);
+    if (target) {
+      target.emit("webrtc-candidate", { candidate, sender: socket.data.name });
+    }
   });
 
   // --- YouTube ---
