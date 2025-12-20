@@ -283,10 +283,11 @@ const displayQueue = {};
 io.on("connection", (socket) => {
   // --- 加入房間 ---
   socket.on("joinRoom", async ({ room, user }) => {
+    
     socket.join(room);
-
+    initSongState(room);
     // 預設值
-    let name = user.name || "訪客" + Math.floor(Math.random() * 999);
+    let name = user.name || "訪客" + Math.floor(Math.random() * 9999);
     let level = 1, exp = 0, gender = "女", avatar = "/avatars/g01.gif";
     let type = user.type || "guest";
 
@@ -489,9 +490,8 @@ io.on("connection", (socket) => {
 
   // --- 加入唱歌排隊 ---
   socket.on("join-queue", ({ room, name }) => {
-    initSongState(room);
     const state = songState[room];
-
+    if (!state) return;
     if (state.queue.includes(name) || state.currentSinger === name) {
       return; // 已經在隊伍中或正在唱
     }
