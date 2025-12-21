@@ -4,7 +4,7 @@ import { callAISongComment } from "./ai.js";
 function getRoomState(room) {
     if (!songState[room]) {
         songState[room] = {
-            queue: [], 
+            queue: [],
             currentSinger: null,
             scores: {},
             listeners: [],
@@ -45,6 +45,8 @@ export function songSocket(io, socket) {
         // 廣播評分開始
         io.to(room).emit("scoring-start");
         console.log(`[scoring-start] 評分開始`);
+        // 確保本輪 scores 為空
+        if (!state.scores[singer]) state.scores[singer] = [];
 
         // 15 秒後計算平均分
         if (state.scoreTimer) clearTimeout(state.scoreTimer);
