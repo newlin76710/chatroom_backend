@@ -20,11 +20,11 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: ["http://localhost:5173", "https://boygirl.ek21.com"],
-    methods: ["GET", "POST"],
+    origin: "*", // 測試用，之後再改成特定域名
+    methods: ["GET","POST"],
     credentials: true
   },
-  allowEIO3: true,
+  transports: ["websocket", "polling"]
 });
 
 // Upload directory
