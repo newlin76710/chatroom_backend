@@ -25,6 +25,10 @@ export function songSocket(io, socket) {
         if (!state.scores[singer]) state.scores[singer] = [];
         state.phase = "singing";
         socket.join(room);
+        const avg = 0;
+        const count = 0;
+        // 廣播前端重置上一輪分數
+        io.to(room).emit("songResult", { avg, count });
         io.to(room).emit("user-start-singing", { singer });
         io.to(singer).emit("update-room-phase", { phase: "singing" }); // 唱歌者自己
         io.to(room).except(singer).emit("update-room-phase", { phase: "canListen", singer });
