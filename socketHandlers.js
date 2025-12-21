@@ -23,6 +23,12 @@ export function songSocket(io, socket) {
         socket.join(room); // 確保在同房間
         io.to(room).emit("user-start-singing", { singer });
         console.log("✅ start-singing emitted public", singer);
+
+        // 設置 15 秒自動結束唱歌
+        if (state.scoreTimer) clearTimeout(state.scoreTimer);
+        state.scoreTimer = setTimeout(() => {
+            socket.emit("stop-singing", { room, singer });
+        }, 15000);
     });
 
     // --- 停止唱歌 ---
@@ -32,12 +38,21 @@ export function songSocket(io, socket) {
 
         state.currentSinger = null;
 
+        // 停止計時器
+        if (state.scoreTimer) clearTimeout(state.scoreTimer);
+
         // 通知房間停止唱歌
         io.to(room).emit("user-stop-singing", { singer });
         console.log("🛑 stop-singing emitted public", singer);
 
-        // 停止計時器
-        if (state.scoreTimer) clearTimeout(state.scoreTimer);
+        // 踢出所有聽眾
+        if (Array.isArray(state.listeners)) {
+            state.listeners.forEach((listenerId) => {
+                io.to(listenerId).emit("listener-left", { listenerId });
+            });
+            state.listeners = [];
+            io.to(room).emit("update-listeners", { listeners: state.listeners });
+        }
 
         // 處理評分
         const scores = state.scores[singer] || [];
@@ -48,12 +63,20 @@ export function songSocket(io, socket) {
             .then((aiComment) => io.to(room).emit("message", aiComment))
             .catch((err) => console.error("AI song comment error:", err));
 
-        // 踢出所有聽眾
-        state.listeners.forEach((listenerId) => {
-            io.to(listenerId).emit("listener-left", { listenerId });
-        });
-        state.listeners = [];
-        io.to(room).emit("update-listeners", { listeners: state.listeners });
+        // 自動播放下一位
+        if (Array.isArray(state.queue) && state.queue.length > 0) {
+            const next = state.queue.shift();
+            state.currentSinger = next;
+            state.scores[next] = state.scores[next] || [];
+
+            io.to(room).emit("next-singer", { singer: next });
+            io.to(room).emit("user-start-singing", { singer: next });
+
+            // 設置下一位 15 秒自動結束
+            state.scoreTimer = setTimeout(() => {
+                socket.emit("stop-singing", { room, singer: next });
+            }, 15000);
+        }
     });
 
     // --- 接收評分 ---
@@ -65,7 +88,7 @@ export function songSocket(io, socket) {
         if (!state.scores[singer]) state.scores[singer] = [];
         state.scores[singer].push(score);
 
-        // 立即告訴評分者自己給了幾分
+        // 告訴評分者自己給了幾分
         socket.emit("scoreAck", { singer, score });
         console.log(`[評分] ${socket.id} 給 ${singer} 評分 ${score}`);
     });
@@ -82,9 +105,7 @@ export function songSocket(io, socket) {
 
         const state = songState[room];
 
-        // 防呆：保證 listeners 一定是陣列
         if (!Array.isArray(state.listeners)) state.listeners = [];
-
         if (!state.listeners.includes(listenerId)) state.listeners.push(listenerId);
 
         const singerId = state.currentSinger;
@@ -93,14 +114,12 @@ export function songSocket(io, socket) {
         io.to(room).emit("update-listeners", { listeners: state.listeners });
     });
 
-
     socket.on("stop-listening", ({ room, listenerId }) => {
         const state = songState[room];
         if (!state || !state.listeners) return;
 
         state.listeners = state.listeners.filter((id) => id !== listenerId);
 
-        // 通知歌手該聽眾離開
         const singerId = state.currentSinger;
         if (singerId) io.to(singerId).emit("listener-left", { listenerId });
 
