@@ -1,92 +1,92 @@
-// songWebRTC.js
 import { songState } from "./song.js";
 import { callAISongComment } from "./ai.js";
 
 export function songSocket(io, socket) {
-    // --- 開始唱歌 ---
-    socket.on("start-singing", ({ room, singer }) => {
-        if (!songState[room]) songState[room] = { queue: [], currentSinger: null, scores: {}, scoreTimer: null };
-        const state = songState[room];
+  // --- 開始唱歌 ---
+  socket.on("start-singing", ({ room, singer }) => {
+    if (!songState[room]) songState[room] = { queue: [], currentSinger: null, scores: {}, scoreTimer: null };
+    const state = songState[room];
 
-        if (state.currentSinger) return; // 已有人在唱
-        state.currentSinger = singer;
-        if (!state.scores[singer]) state.scores[singer] = [];
+    if (state.currentSinger) return; // 已有人在唱
+    state.currentSinger = singer;
+    if (!state.scores[singer]) state.scores[singer] = [];
 
-        socket.to(room).emit("user-start-singing", { singer });
-        console.log("✅ start-singing emitted public", singer);
-    });
+    socket.to(room).emit("user-start-singing", { singer });
+    console.log("✅ start-singing emitted public", singer);
+  });
 
-    // --- 停止唱歌 / 自動下一位 ---
-    socket.on("stop-singing", ({ room, singer }) => {
-        const state = songState[room];
-        if (!state || state.currentSinger !== singer) return;
+  // --- 停止唱歌 ---
+  socket.on("stop-singing", ({ room, singer }) => {
+    const state = songState[room];
+    if (!state || state.currentSinger !== singer) return;
 
-        state.currentSinger = null;
-        socket.to(room).emit("user-stop-singing", { singer });
-        console.log("🛑 stop-singing emitted public", singer);
+    state.currentSinger = null;
+    socket.to(room).emit("user-stop-singing", { singer });
+    console.log("🛑 stop-singing emitted public", singer);
 
-        if (state.scoreTimer) clearTimeout(state.scoreTimer);
+    if (state.scoreTimer) clearTimeout(state.scoreTimer);
 
-        // 計算分數
-        state.scoreTimer = setTimeout(async () => {
-            const scores = state.scores[singer] || [];
-            const avg = scores.length ? scores.reduce((a, b) => a + b, 0) / scores.length : 0;
+    // 先處理評分
+    const scores = state.scores[singer] || [];
+    const avg = scores.length ? scores.reduce((a, b) => a + b, 0) / scores.length : 0;
+    io.to(room).emit("songResult", { singer, avg, count: scores.length });
 
-            io.to(room).emit("songResult", { singer, avg, count: scores.length });
+    callAISongComment({ singer, avg })
+      .then((aiComment) => io.to(room).emit("message", aiComment))
+      .catch((err) => console.error("AI song comment error:", err));
 
-            try {
-                const aiComment = await callAISongComment({ singer, avg });
-                io.to(room).emit("message", aiComment);
-            } catch (err) {
-                console.error("AI song comment error:", err);
-            }
+    // 播放下一位
+    state.scoreTimer = setTimeout(() => {
+      const currentState = songState[room];
+      if (!currentState) return;
 
-            // 播放下一位
-            if (state.queue.length > 0) {
-                const next = state.queue.shift();
-                state.currentSinger = next;
-                state.scores[next] = state.scores[next] || [];
-                io.to(room).emit("next-singer", { singer: next });
-                io.to(room).emit("user-start-singing", { singer: next });
+      if (!Array.isArray(currentState.queue)) currentState.queue = [];
 
-                state.scoreTimer = setTimeout(() => {
-                    socket.emit("stop-singing", { room, singer: next });
-                }, 15000);
-            } else {
-                state.currentSinger = null;
-                io.to(room).emit("updateSingingStatus", { currentSinger: null });
-            }
+      if (currentState.queue.length > 0) {
+        const next = currentState.queue.shift();
+        currentState.currentSinger = next;
+        currentState.scores[next] = currentState.scores[next] || [];
+
+        io.to(room).emit("next-singer", { singer: next });
+        io.to(room).emit("user-start-singing", { singer: next });
+
+        // 設定自動結束
+        currentState.scoreTimer = setTimeout(() => {
+          socket.emit("stop-singing", { room, singer: next });
         }, 15000);
-    });
+      } else {
+        currentState.currentSinger = null;
+        io.to(room).emit("updateSingingStatus", { currentSinger: null });
+      }
+    }, 100); // 確保先處理結果再下一位
+  });
 
-    // --- 接收評分 ---
-    socket.on("scoreSong", ({ room, score }) => {
-        const state = songState[room];
-        if (!state || !state.currentSinger) return;
-        const singer = state.currentSinger;
-        if (!state.scores[singer]) state.scores[singer] = [];
-        state.scores[singer].push(score);
-        console.log(`[🎵 評分] ${singer} +${score}`);
-    });
+  // --- 接收評分 ---
+  socket.on("scoreSong", ({ room, score }) => {
+    const state = songState[room];
+    if (!state || !state.currentSinger) return;
 
-    // --- 聽眾準備接收 WebRTC ---
-    socket.on("listener-ready", ({ room, listenerId }) => {
-        const singerId = songState[room]?.currentSinger;
-        if (!singerId) return;
+    const singer = state.currentSinger;
+    if (!state.scores[singer]) state.scores[singer] = [];
+    state.scores[singer].push(score);
+  });
 
-        // 告訴唱歌者建立 WebRTC 連線給這個聽眾
-        io.to(singerId).emit("new-listener", { listenerId });
-        console.log("👂 listener-ready:", listenerId, "→ 通知唱歌者", singerId);
-    });
-    socket.on("stop-listening", ({ room, listenerId }) => {
-        const singerId = songState[room]?.currentSinger;
-        if (!singerId) return;
+  // --- 聽眾準備接收 WebRTC ---
+  socket.on("listener-ready", ({ room, listenerId }) => {
+    const state = songState[room];
+    const singerId = state?.currentSinger;
+    if (!singerId) return;
 
-        // 告訴唱歌者可以關閉對應 PeerConnection
-        io.to(singerId).emit("listener-left", { listenerId });
-        console.log("👂 listener-left:", listenerId);
-    });
+    io.to(singerId).emit("new-listener", { listenerId });
+    console.log("👂 listener-ready:", listenerId);
+  });
 
+  socket.on("stop-listening", ({ room, listenerId }) => {
+    const state = songState[room];
+    if (!state) return;
+    io.to(state.currentSinger).emit("listener-left", { listenerId });
+    console.log("🛑 stop-listening:", listenerId);
+  });
 }
 
 // -------------------------
