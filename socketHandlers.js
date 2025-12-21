@@ -35,7 +35,7 @@ export function songSocket(io, socket) {
     socket.on("stop-singing", ({ room, singer }) => {
         const state = getRoomState(room);
         if (!state || state.currentSinger !== singer) return;
-        state.currentSinger = null;
+
         state.phase = "scoring"; // 評分階段
         // 通知房間停止唱歌
         io.to(room).emit("user-stop-singing", { singer });
@@ -69,6 +69,7 @@ export function songSocket(io, socket) {
                 });
             }
             state.listeners = [];
+            state.currentSinger = null;
             state.phase = "idle"; // 評分結束回到 idle
             io.to(room).emit("update-listeners", { listeners: [] });
             io.to(room).emit("update-room-phase", { phase: state.phase });
