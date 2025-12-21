@@ -12,6 +12,7 @@ import { aiRouter } from "./ai.js";
 import { songRouter, songState, displayQueue } from "./song.js";
 import { chatHandlers, startAIAutoTalk, rooms, roomContext } from "./chat.js";
 import { webrtcHandlers } from "./webrtc.js";
+import { songSocket } from "./socketHandlers.js";
 
 dotenv.config();
 
@@ -47,8 +48,14 @@ app.use("/song", songRouter);
 
 // Socket.io
 io.on("connection", (socket) => {
+  // 聊天 + AI
   chatHandlers(io, socket);
+
+  // WebRTC 信令
   webrtcHandlers(io, socket);
+
+  // 歌唱狀態 + 評分
+  songSocket(io, socket);
 });
 
 const port = process.env.PORT || 10000;

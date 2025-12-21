@@ -1,11 +1,9 @@
 import express from "express";
 import fs from "fs";
 import path from "path";
-import { pool } from "./db.js";
 import { callAISongComment } from "./ai.js";
 
 export const songRouter = express.Router();
-
 export const songState = {};   // songState[room] = { queue, currentSinger, scores, scoreTimer }
 export const displayQueue = {}; // 純顯示用播放列隊
 
@@ -13,7 +11,7 @@ const __dirname = new URL('.', import.meta.url).pathname;
 const uploadDir = path.join(__dirname, "uploads", "songs");
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
 
-// 歌曲上傳
+// --- 歌曲上傳 ---
 songRouter.post("/upload", async (req, res) => {
   try {
     const { audioBase64, singer } = req.body;
@@ -31,7 +29,7 @@ songRouter.post("/upload", async (req, res) => {
   }
 });
 
-// 播放下一位歌手
+// --- 播放下一位歌手 ---
 export function playNextSinger(room, io) {
   const state = songState[room];
   if (!state || !state.queue || !state.queue.length) return;
