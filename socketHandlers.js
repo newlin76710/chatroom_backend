@@ -22,12 +22,12 @@ export function songSocket(io, socket) {
         const state = getRoomState(room);
         if (state.currentSinger) return;
         state.currentSinger = singer;
-        state.phase = "singing"; // 更新房間 phase
         if (!state.scores[singer]) state.scores[singer] = [];
-
+        state.phase = "singing";
         socket.join(room);
         io.to(room).emit("user-start-singing", { singer });
-        io.to(room).emit("update-room-phase", { phase: state.phase, singer });
+        io.to(singer).emit("update-room-phase", { phase: "singing" }); // 唱歌者自己
+        io.to(room).except(singer).emit("update-room-phase", { phase: "canListen", singer });
         console.log(`[start-singing] ${singer} 開始唱歌`);
     });
 
