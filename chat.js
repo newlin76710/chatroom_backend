@@ -162,49 +162,65 @@ export function chatHandlers(io, socket) {
 
     // socketHandlers/chat.js 或 server.js
     socket.on("kickUser", ({ room, targetName }) => {
-        console.log("kickUser received:", room, targetName);
+        console.log("🔹 kickUser received:", room, targetName);
+
         const users = rooms[room];
-        if (!users) return;
+        if (!users) {
+            console.log("❌ room not found:", room);
+            return;
+        }
+        console.log("📋 users in room:", users.map(u => ({ name: u.name, socketId: u.socketId, level: u.level })));
 
         const kicker = users.find(u => u.socketId === socket.id);
-        if (!kicker) return;
+        if (!kicker) {
+            console.log("❌ kicker not found, socket.id =", socket.id);
+            return;
+        }
+        console.log("✅ kicker found:", kicker.name, "level:", kicker.level);
 
-        // ❌ 權限檢查
+        // 權限檢查
         if (kicker.level < 99) {
+            console.log("❌ 權限不足:", kicker.name, kicker.level);
             socket.emit("kickFailed", { reason: "權限不足" });
             return;
         }
 
-        // ❌ 不能踢自己
+        // 不能踢自己
         if (kicker.name === targetName) {
+            console.log("❌ 不能踢自己:", kicker.name);
             socket.emit("kickFailed", { reason: "不能踢自己" });
             return;
         }
 
         const target = users.find(u => u.name === targetName);
-        if (!target) return;
+        if (!target) {
+            console.log("❌ target not found:", targetName);
+            return;
+        }
+        console.log("✅ target found:", target.name, "socketId:", target.socketId);
 
         const targetSocket = io.sockets.sockets.get(target.socketId);
-        if (!targetSocket) return;
+        if (!targetSocket) {
+            console.log("❌ target socket not found:", target.socketId);
+            return;
+        }
+        console.log("✅ target socket found, emitting 'kicked'");
 
-        // ✅ 通知被踢的人
-        targetSocket.emit("kicked", {
-            by: kicker.name,
-            room
-        });
+        // 通知被踢的人
+        targetSocket.emit("kicked", { by: kicker.name, room });
 
-        // ✅ 強制離開房間
+        // 強制離開房間
         targetSocket.leave(room);
 
-        // ✅ 從 rooms 移除
+        // 從 rooms 移除
         rooms[room] = users.filter(u => u.name !== targetName);
+        console.log("📋 updated users in room:", rooms[room].map(u => u.name));
 
-        // ✅ 更新房間使用者列表
+        // 更新房間使用者列表
         io.to(room).emit("updateUsers", rooms[room]);
 
         console.log(`👢 ${kicker.name} 踢出了 ${targetName}`);
     });
-
 
     // --- 取得房間使用者 ---
     socket.on("getRoomUsers", (room, callback) => {
