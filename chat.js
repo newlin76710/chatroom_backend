@@ -162,6 +162,7 @@ export function chatHandlers(io, socket) {
 
     // socketHandlers/chat.js 或 server.js
     socket.on("kickUser", ({ room, targetName }) => {
+        console.log("kickUser received:", room, targetName);
         const users = rooms[room];
         if (!users) return;
 
