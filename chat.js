@@ -160,6 +160,51 @@ export function chatHandlers(io, socket) {
         io.to(room).emit("videoQueueUpdate", videoState[room].queue);
     });
 
+    // socketHandlers/chat.js 或 server.js
+    socket.on("kickUser", ({ room, targetName }) => {
+        const users = rooms[room];
+        if (!users) return;
+
+        const kicker = users.find(u => u.socketId === socket.id);
+        if (!kicker) return;
+
+        // ❌ 權限檢查
+        if (kicker.level < 99) {
+            socket.emit("kickFailed", { reason: "權限不足" });
+            return;
+        }
+
+        // ❌ 不能踢自己
+        if (kicker.name === targetName) {
+            socket.emit("kickFailed", { reason: "不能踢自己" });
+            return;
+        }
+
+        const target = users.find(u => u.name === targetName);
+        if (!target) return;
+
+        const targetSocket = io.sockets.sockets.get(target.socketId);
+        if (!targetSocket) return;
+
+        // ✅ 通知被踢的人
+        targetSocket.emit("kicked", {
+            by: kicker.name,
+            room
+        });
+
+        // ✅ 強制離開房間
+        targetSocket.leave(room);
+
+        // ✅ 從 rooms 移除
+        rooms[room] = users.filter(u => u.name !== targetName);
+
+        // ✅ 更新房間使用者列表
+        io.to(room).emit("updateUsers", rooms[room]);
+
+        console.log(`👢 ${kicker.name} 踢出了 ${targetName}`);
+    });
+
+
     // --- 取得房間使用者 ---
     socket.on("getRoomUsers", (room, callback) => {
         const users = (rooms[room] || []).filter(u => u.id !== socket.id);
