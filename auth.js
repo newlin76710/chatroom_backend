@@ -4,7 +4,7 @@ import bcrypt from "bcryptjs";
 import { pool } from "./db.js";
 
 export const authRouter = express.Router();
-export const ioTokens = {};
+export const ioTokens = new Map();
 // 訪客登入
 authRouter.post("/guest", async (req, res) => {
   try {
