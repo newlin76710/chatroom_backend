@@ -33,15 +33,15 @@ export function chatHandlers(io, socket) {
 
         if (!rooms[room]) rooms[room] = [];
 
-        // 檢查使用者是否已存在
-        let existingUser = rooms[room].find(u => u.name === user.name);
-
         let name = user.name || "訪客" + Math.floor(Math.random() * 9999);
         let level = 1, exp = 0, gender = "女", avatar = "/avatars/g01.gif";
         let type = user.type || "guest";
 
         try {
-            const res = await pool.query(`SELECT username, level, exp, gender, avatar FROM users WHERE username=$1`, [user.name]);
+            const res = await pool.query(
+                `SELECT username, level, exp, gender, avatar FROM users WHERE username=$1`,
+                [user.name]
+            );
             const dbUser = res.rows[0];
             if (dbUser) {
                 name = dbUser.username;
@@ -58,17 +58,20 @@ export function chatHandlers(io, socket) {
         // 更新 socket.data
         socket.data = { room, name, level, exp, gender, avatar, type };
 
-        if (!existingUser) {
-            // ✅ 一定要存 socketId
-            rooms[room].push({ id: socket.id, socketId: socket.id, name, type, level, exp, gender, avatar });
-        } else {
-            // 已存在，更新 socketId（刷新或重連）
-            existingUser.socketId = socket.id;
-            existingUser.level = level;
-            existingUser.exp = exp;
-            existingUser.gender = gender;
-            existingUser.avatar = avatar;
+        // 🔥 後登入踢掉前登入
+        const existingUser = rooms[room].find(u => u.name === name);
+        if (existingUser && existingUser.socketId !== socket.id) {
+            const oldSocket = io.sockets.sockets.get(existingUser.socketId);
+            if (oldSocket) {
+                oldSocket.emit("forceLogout", { reason: `你的帳號被 ${name} 取代` });
+                oldSocket.disconnect(true);
+            }
+            // 移除舊使用者
+            rooms[room] = rooms[room].filter(u => u.name !== name);
         }
+
+        // 加入或更新房間列表
+        rooms[room].push({ id: socket.id, socketId: socket.id, name, type, level, exp, gender, avatar });
 
         // 加入 AI（如果沒加入過）
         aiNames.forEach(ai => {
@@ -98,7 +101,6 @@ export function chatHandlers(io, socket) {
 
         startAIAutoTalk(io, room);
     });
-
 
     // --- 聊天訊息 ---
     socket.on("message", async ({ room, message, user, target, mode }) => {
