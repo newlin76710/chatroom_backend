@@ -29,6 +29,7 @@ const io = new Server(server, {
 
 // ===== Upload dir =====
 const __dirname = path.resolve();
+
 const uploadDir = path.join(__dirname, "uploads", "songs");
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
 
@@ -46,9 +47,6 @@ app.use("/songs", express.static(uploadDir));
 app.use("/auth", authRouter);
 app.use("/ai", aiRouter);
 app.use("/song", songRouter);
-
-// ===== Peers（管理 transports / producers / consumers）=====
-const peers = {};
 
 // ===== Socket.IO =====
 io.on("connection", socket => {
