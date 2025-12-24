@@ -81,6 +81,11 @@ function playNextSinger(room, io) {
   const nextSinger = state.queue.shift();
   state.currentSinger = nextSinger;
   io.to(room).emit("queueUpdate", { queue: state.queue, current: nextSinger });
-  io.to(nextSinger).emit("update-room-phase", { phase: "recording" });
+
+  // 改成 singing 狀態，由前端手動點錄音
+  io.to(nextSinger).emit("update-room-phase", { phase: "singing" });
+
+  // 其他人是 listening
   io.to(room).except(nextSinger).emit("update-room-phase", { phase: "listening", singer: nextSinger });
 }
+
