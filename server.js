@@ -12,7 +12,7 @@ import { authRouter } from "./auth.js";
 import { aiRouter } from "./ai.js";
 import { songRouter } from "./song.js";
 import { chatHandlers } from "./chat.js";
-import { songSocket, webrtcHandlers } from "./socketHandlers.js";
+import { songSocket } from "./socketHandlers.js";
 import {
   initMediasoup,
   createWebRtcTransport,
