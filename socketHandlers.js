@@ -1,4 +1,3 @@
-// songSocket.js
 import { songState } from "./song.js";
 
 export function songSocket(io, socket) {
@@ -17,10 +16,8 @@ export function songSocket(io, socket) {
     if (!state.currentSinger && state.queue.length > 0) {
       playNextSinger(room, io);
     } else {
-      io.to(room).emit("queueUpdate", { 
-        queue: state.queue.map(u => u.name), 
-        current: state.currentSinger 
-      });
+      // 廣播更新隊列給所有人
+      io.to(room).emit("queueUpdate", { queue: state.queue.map(u => u.name), current: state.currentSinger });
     }
   });
 
@@ -66,7 +63,6 @@ export function songSocket(io, socket) {
     if (!state) return;
     state.queue = state.queue.filter(u => u.name !== singer);
 
-    // 如果離開的是正在唱的人
     if (state.currentSinger === singer) {
       if (state.scoreTimer) clearTimeout(state.scoreTimer);
       state.currentSinger = null;
@@ -104,11 +100,11 @@ function playNextSinger(room, io) {
   const nextSinger = state.queue.shift();
   state.currentSinger = nextSinger.name;
 
-  // 廣播更新隊列
+  // 廣播更新隊列給所有人
   io.to(room).emit("queueUpdate", { queue: state.queue.map(u => u.name), current: nextSinger.name });
 
   // 通知下一位唱歌
-  io.to(nextSinger.socketId).emit("update-room-phase", { phase: "singing" });
+  io.to(nextSinger.socketId).emit("update-room-phase", { phase: "singing", singer: nextSinger.name });
 
   // 其他人 listening
   state.queue.forEach(u => {
