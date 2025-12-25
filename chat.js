@@ -30,7 +30,7 @@ export function chatHandlers(io, socket) {
     socket.on("joinRoom", async ({ room, user }) => {
         const state = getRoomState(room);
         socket.join(room);
-
+        console.log("🟢 join", room, socket.id);
         if (!rooms[room]) rooms[room] = [];
 
         let name = user.name || "訪客" + Math.floor(Math.random() * 9999);
