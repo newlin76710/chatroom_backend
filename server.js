@@ -6,6 +6,7 @@ import cors from "cors";
 import dotenv from "dotenv";
 import path from "path";
 import fs from "fs";
+import fetch from "node-fetch"; // Node 18+ 可直接用 fetch
 
 import { pool } from "./db.js";
 import { authRouter } from "./auth.js";
@@ -29,7 +30,6 @@ const io = new Server(server, {
 
 // ===== Upload dir =====
 const __dirname = path.resolve();
-
 const uploadDir = path.join(__dirname, "uploads", "songs");
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
 
@@ -52,17 +52,28 @@ app.use("/song", songRouter);
 io.on("connection", socket => {
   console.log(`[socket] ${socket.id} connected`);
 
-  // ===== 原本功能：聊天 / AI =====
+  // 聊天 / AI
   chatHandlers(io, socket);
 
-  // ===== 原本唱歌 / 評分 =====
+  // 唱歌 / 評分
   songSocket(io, socket);
 
-  // ===== 斷線清理 =====
   socket.on("disconnect", () => {
     console.log(`[socket] ${socket.id} disconnected`);
   });
 });
+
+// ===== Heartbeat for Render =====
+const HEARTBEAT_INTERVAL = 1 * 60 * 1000; // 每 1 分鐘
+setInterval(async () => {
+  try {
+    const url = process.env.SELF_URL || `http://localhost:${process.env.PORT || 10000}/`;
+    const res = await fetch(url);
+    console.log(`[Heartbeat] ${new Date().toISOString()} - Status: ${res.status}`);
+  } catch (err) {
+    console.error("[Heartbeat] Error:", err.message);
+  }
+}, HEARTBEAT_INTERVAL);
 
 // ===== Start server =====
 const port = process.env.PORT || 10000;
