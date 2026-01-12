@@ -130,6 +130,7 @@ export function chatHandlers(io, socket) {
                         roomUser.type = account_type || roomUser.type || "guest";
                     }
                 }
+                io.to(room).emit("updateUsers", rooms[room]);
             }
         } catch (err) { console.error("更新 EXP/LV/使用者資料 失敗：", err); }
 
