@@ -6,6 +6,7 @@ export function songSocket(io, socket) {
   function broadcastMicState(room) {
     const state = songState[room];
     if (!state) return;
+    console.log(`[broadcastMicState] room=${room}, currentSinger=${state.currentSinger}, queue=[${state.queue.map(u => u.name).join(", ")}]`);
     io.to(room).emit("micStateUpdate", {
       queue: state.queue.map(u => u.name),
       currentSinger: state.currentSinger || null
@@ -125,7 +126,7 @@ export function songSocket(io, socket) {
     const nextSinger = state.queue.shift();
     state.currentSinger = nextSinger.name;
     state.currentSingerSocketId = nextSinger.socketId;
-
+    console.log(`[playNextSinger] Next singer=${nextSinger.name} in room=${room}`);
     broadcastMicState(room);
 
     // 通知下一位唱歌
