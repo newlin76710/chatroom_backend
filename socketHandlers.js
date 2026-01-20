@@ -16,8 +16,11 @@ export function songSocket(io, socket) {
     if (!state.currentSinger && state.queue.length > 0) {
       playNextSinger(room, io);
     } else {
-      // 廣播更新隊列給所有人
-      io.to(room).emit("queueUpdate", { queue: state.queue.map(u => u.name), current: state.currentSinger });
+      // 廣播更新隊列給所有人（保證 currentSinger 一定帶）
+      io.to(room).emit("queueUpdate", {
+        queue: state.queue.map(u => u.name),
+        current: state.currentSinger || null
+      });
     }
   });
 
@@ -29,7 +32,6 @@ export function songSocket(io, socket) {
     state.currentSinger = singer;
     state.scores[singer] = [];
 
-    // 廣播給房間其他人播放
     io.to(room).emit("playSong", { url, duration, singer });
 
     // 開始倒數評分
@@ -44,7 +46,7 @@ export function songSocket(io, socket) {
 
       // 自動下一位
       if (state.queue.length > 0) playNextSinger(room, io);
-
+      else io.to(room).emit("queueUpdate", { queue: [], current: null });
     }, duration * 1000);
   });
 
@@ -61,15 +63,16 @@ export function songSocket(io, socket) {
   socket.on("leaveQueue", ({ room, singer }) => {
     const state = songState[room];
     if (!state) return;
+
     state.queue = state.queue.filter(u => u.name !== singer);
 
     if (state.currentSinger === singer) {
       if (state.scoreTimer) clearTimeout(state.scoreTimer);
       state.currentSinger = null;
       if (state.queue.length > 0) playNextSinger(room, io);
-      else io.to(room).emit("queueUpdate", { queue: state.queue.map(u => u.name), current: null });
+      else io.to(room).emit("queueUpdate", { queue: [], current: null });
     } else {
-      io.to(room).emit("queueUpdate", { queue: state.queue.map(u => u.name), current: state.currentSinger });
+      io.to(room).emit("queueUpdate", { queue: state.queue.map(u => u.name), current: state.currentSinger || null });
     }
   });
 
@@ -78,27 +81,29 @@ export function songSocket(io, socket) {
     for (const room in songState) {
       const state = songState[room];
       if (!state) continue;
+
       // 移除隊列
       state.queue = state.queue.filter(u => u.socketId !== socket.id);
+
       // 如果正在唱的人斷線
-      if (state.currentSinger && state.queue.find(u => u.socketId === socket.id)?.name === state.currentSinger) {
+      if (state.currentSinger && state.currentSingerSocketId === socket.id) {
         if (state.scoreTimer) clearTimeout(state.scoreTimer);
         state.currentSinger = null;
         if (state.queue.length > 0) playNextSinger(room, io);
         else io.to(room).emit("queueUpdate", { queue: state.queue.map(u => u.name), current: null });
+      } else {
+        io.to(room).emit("queueUpdate", { queue: state.queue.map(u => u.name), current: state.currentSinger || null });
       }
     }
   });
+
   // ===== WebRTC OFFER =====
   socket.on("webrtc-offer", ({ room, offer, singer }) => {
-    console.log("📨 webrtc-offer", singer);
     socket.to(room).emit("webrtc-offer", { offer, singer });
-    console.log("offer room:", room, "members:", io.sockets.adapter.rooms.get(room)?.size);
   });
 
   // ===== WebRTC ANSWER =====
   socket.on("webrtc-answer", ({ room, answer }) => {
-    console.log("📨 webrtc-answer");
     socket.to(room).emit("webrtc-answer", { answer });
   });
 
@@ -109,7 +114,6 @@ export function songSocket(io, socket) {
 
   // ===== STOP =====
   socket.on("webrtc-stop", ({ room }) => {
-    console.log("🛑 webrtc-stop");
     socket.to(room).emit("webrtc-stop");
   });
 }
@@ -121,6 +125,7 @@ function playNextSinger(room, io) {
 
   const nextSinger = state.queue.shift();
   state.currentSinger = nextSinger.name;
+  state.currentSingerSocketId = nextSinger.socketId; // 記錄 socketId
 
   // 廣播更新隊列給所有人
   io.to(room).emit("queueUpdate", { queue: state.queue.map(u => u.name), current: nextSinger.name });
