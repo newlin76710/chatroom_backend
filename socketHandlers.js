@@ -1,3 +1,4 @@
+// socketHandlers.js
 import { songState } from "./song.js";
 
 export function songSocket(io, socket) {
@@ -13,22 +14,40 @@ export function songSocket(io, socket) {
     });
   }
 
-  // ===== 加入隊列 =====
-  socket.on("joinQueue", ({ room, singer }) => {
-    if (!songState[room]) songState[room] = { queue: [], currentSinger: null, scores: {}, scoreTimer: null };
+  // ===== 播放下一位歌手 =====
+  function playNextSinger(room) {
     const state = songState[room];
+    if (!state || !state.queue.length) return;
 
-    // 檢查是否已經在隊列或正在唱
-    if (!state.queue.find(u => u.name === singer) && state.currentSinger !== singer) {
-      state.queue.push({ name: singer, socketId: socket.id });
-    }
+    const nextSinger = state.queue.shift();
+    state.currentSinger = nextSinger.name;
+    state.currentSingerSocketId = nextSinger.socketId;
 
-    // 如果沒人在唱歌，自動下一位
-    if (!state.currentSinger && state.queue.length > 0) {
-      playNextSinger(room, io);
-    }
+    console.log(`[playNextSinger] Next singer=${nextSinger.name} in room=${room}`);
 
     broadcastMicState(room);
+
+    // 通知下一位開始唱
+    io.to(nextSinger.socketId).emit("update-room-phase", { phase: "singing", singer: nextSinger.name });
+
+    // 其他人在聽
+    state.queue.forEach(u => {
+      io.to(u.socketId).emit("update-room-phase", { phase: "listening", singer: nextSinger.name });
+    });
+  }
+
+  // ===== 加入隊列 =====
+  socket.on("joinQueue", ({ room, singer }) => {
+    if (!songState[room]) songState[room] = { queue: [], currentSinger: null, currentSingerSocketId: null, scores: {}, scoreTimer: null };
+    const state = songState[room];
+
+    if (!state.queue.find(u => u.name === singer) && state.currentSinger !== singer) {
+      state.queue.push({ name: singer, socketId: socket.id });
+      console.log(`[joinQueue] ${singer} joined queue in room=${room}`);
+    }
+
+    if (!state.currentSinger) playNextSinger(room);
+    else broadcastMicState(room);
   });
 
   // ===== 離開隊列 =====
@@ -37,11 +56,13 @@ export function songSocket(io, socket) {
     if (!state) return;
 
     state.queue = state.queue.filter(u => u.name !== singer);
+    console.log(`[leaveQueue] ${singer} left queue in room=${room}`);
 
     if (state.currentSinger === singer) {
       if (state.scoreTimer) clearTimeout(state.scoreTimer);
       state.currentSinger = null;
-      if (state.queue.length > 0) playNextSinger(room, io);
+      state.currentSingerSocketId = null;
+      if (state.queue.length > 0) playNextSinger(room);
       else broadcastMicState(room);
     } else {
       broadcastMicState(room);
@@ -54,9 +75,13 @@ export function songSocket(io, socket) {
     if (!state) return;
 
     state.currentSinger = singer;
+    state.currentSingerSocketId = socket.id;
     state.scores[singer] = [];
 
+    console.log(`[songReady] ${singer} ready to play in room=${room}, duration=${duration}s`);
+
     io.to(room).emit("playSong", { url, duration, singer });
+    broadcastMicState(room);
 
     if (state.scoreTimer) clearTimeout(state.scoreTimer);
     state.scoreTimer = setTimeout(() => {
@@ -65,13 +90,12 @@ export function songSocket(io, socket) {
       io.to(room).emit("songResult", { avg, count: scores.length });
 
       state.currentSinger = null;
+      state.currentSingerSocketId = null;
       state.scoreTimer = null;
 
-      if (state.queue.length > 0) playNextSinger(room, io);
+      if (state.queue.length > 0) playNextSinger(room);
       else broadcastMicState(room);
     }, duration * 1000);
-
-    broadcastMicState(room);
   });
 
   // ===== 評分 =====
@@ -81,60 +105,35 @@ export function songSocket(io, socket) {
     const singer = state.currentSinger;
     if (!state.scores[singer]) state.scores[singer] = [];
     state.scores[singer].push(score);
+    console.log(`[scoreSong] ${singer} got score=${score} in room=${room}`);
   });
 
   // ===== 斷線清理 =====
   socket.on("disconnect", () => {
+    console.log(`[socket] ${socket.id} disconnected`);
     for (const room in songState) {
       const state = songState[room];
       if (!state) continue;
 
-      // 移除隊列
+      const wasInQueue = state.queue.find(u => u.socketId === socket.id);
       state.queue = state.queue.filter(u => u.socketId !== socket.id);
 
-      // 如果正在唱的人斷線
       if (state.currentSingerSocketId === socket.id) {
+        console.log(`[disconnect] current singer ${state.currentSinger} disconnected in room=${room}`);
         if (state.scoreTimer) clearTimeout(state.scoreTimer);
         state.currentSinger = null;
-        if (state.queue.length > 0) playNextSinger(room, io);
+        state.currentSingerSocketId = null;
+        if (state.queue.length > 0) playNextSinger(room);
         else broadcastMicState(room);
-      } else {
+      } else if (wasInQueue) {
         broadcastMicState(room);
       }
     }
   });
 
   // ===== WebRTC =====
-  socket.on("webrtc-offer", ({ room, offer, singer }) => {
-    socket.to(room).emit("webrtc-offer", { offer, singer });
-  });
-  socket.on("webrtc-answer", ({ room, answer }) => {
-    socket.to(room).emit("webrtc-answer", { answer });
-  });
-  socket.on("webrtc-ice", ({ room, candidate }) => {
-    socket.to(room).emit("webrtc-ice", { candidate });
-  });
-  socket.on("webrtc-stop", ({ room }) => {
-    socket.to(room).emit("webrtc-stop");
-  });
-
-  // ===== 播放下一位歌手 =====
-  function playNextSinger(room, io) {
-    const state = songState[room];
-    if (!state || !state.queue.length) return;
-
-    const nextSinger = state.queue.shift();
-    state.currentSinger = nextSinger.name;
-    state.currentSingerSocketId = nextSinger.socketId;
-    console.log(`[playNextSinger] Next singer=${nextSinger.name} in room=${room}`);
-    broadcastMicState(room);
-
-    // 通知下一位唱歌
-    io.to(nextSinger.socketId).emit("update-room-phase", { phase: "singing", singer: nextSinger.name });
-
-    // 其他人 listening
-    state.queue.forEach(u => {
-      io.to(u.socketId).emit("update-room-phase", { phase: "listening", singer: nextSinger.name });
-    });
-  }
+  socket.on("webrtc-offer", ({ room, offer, singer }) => socket.to(room).emit("webrtc-offer", { offer, singer }));
+  socket.on("webrtc-answer", ({ room, answer }) => socket.to(room).emit("webrtc-answer", { answer }));
+  socket.on("webrtc-ice", ({ room, candidate }) => socket.to(room).emit("webrtc-ice", { candidate }));
+  socket.on("webrtc-stop", ({ room }) => socket.to(room).emit("webrtc-stop"));
 }
