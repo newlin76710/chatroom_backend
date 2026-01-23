@@ -7,7 +7,7 @@ import dotenv from "dotenv";
 import path from "path";
 import fs from "fs";
 import fetch from "node-fetch"; // Node 18+ 可直接用 fetch
-import { AccessToken, RoomGrant } from "livekit-server-sdk"; // ✅ 新版 SDK
+import { AccessToken } from "livekit-server-sdk"; // ✅ 舊版寫法，只需 AccessToken
 
 import { pool } from "./db.js";
 import { authRouter } from "./auth.js";
@@ -69,24 +69,26 @@ app.get("/livekit-token", (req, res) => {
   }
 
   const state = songState[room];
-  const isSinger = state && state.currentSinger === name;
+  const isSinger = state && state.currentSinger === name; // 是否輪到唱
 
-  // 產生 token
+  // 產生 LiveKit token (舊版 SDK 寫法)
   const at = new AccessToken(
     process.env.LIVEKIT_API_KEY,
     process.env.LIVEKIT_API_SECRET,
     { identity: name, ttl: 600 } // 10 分鐘
   );
 
-  const grant = new RoomGrant({ room });
-  grant.roomJoin = true;
-  grant.canPublish = isSinger; // 🎤 只有輪到的人能開 mic
-  grant.canSubscribe = true;    // 聽眾都能聽
-  grant.canPublishData = true;  // data channel
-  at.addGrant(grant);
+  at.addGrant({
+    room: room,
+    roomJoin: true,
+    canPublish: isSinger, // 🎤 只有輪到的人能開 mic
+    canSubscribe: true,   // 聽眾都能聽
+    canPublishData: true, // DataChannel
+    hidden: false,
+  });
 
   res.json({
-    token: at.toJwt(),              // ✅ 必須是字串 JWT
+    token: at.toJwt(), // ✅ 這裡一定是字串 JWT
     role: isSinger ? "singer" : "listener",
   });
 });
