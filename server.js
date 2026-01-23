@@ -79,7 +79,7 @@ app.get("/livekit-token", async (req, res) => {
     at.addGrant({
       room: room,
       roomJoin: true,
-      canPublish: isSinger, // 只有輪到唱的人能開 mic
+      canPublish: true, // 只有輪到唱的人能開 mic
       canSubscribe: true,   // 聽眾都能收聽
       canPublishData: true, // data channel 可用
     });
