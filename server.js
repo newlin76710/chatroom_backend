@@ -7,6 +7,7 @@ import dotenv from "dotenv";
 import path from "path";
 import fs from "fs";
 import fetch from "node-fetch"; // Node 18+ 可直接用 fetch
+import { AccessToken } from "livekit-server-sdk"; // ✅ 新增
 
 import { pool } from "./db.js";
 import { authRouter } from "./auth.js";
@@ -14,6 +15,7 @@ import { aiRouter } from "./ai.js";
 import { songRouter } from "./song.js";
 import { chatHandlers } from "./chat.js";
 import { songSocket } from "./socketHandlers.js";
+import { songState } from "./song.js"; // ✅ 為 token API 判斷歌手
 
 dotenv.config();
 
@@ -47,6 +49,38 @@ app.use("/songs", express.static(uploadDir));
 app.use("/auth", authRouter);
 app.use("/ai", aiRouter);
 app.use("/song", songRouter);
+
+// ===== LiveKit Token API =====
+app.get("/livekit-token", (req, res) => {
+  const { room, name } = req.query;
+
+  if (!room || !name) {
+    return res.status(400).json({ error: "missing room or name" });
+  }
+
+  const state = songState[room];
+  const isSinger = state && state.currentSinger === name; // 是否輪到唱
+
+  const at = new AccessToken(
+    process.env.LIVEKIT_API_KEY,
+    process.env.LIVEKIT_API_SECRET,
+    { identity: name, ttl: 60 * 10 } // 10 分鐘
+  );
+
+  at.addGrant({
+    room,
+    roomJoin: true,
+    canPublish: isSinger,       // 🎤 只有輪到的人能開 mic
+    canSubscribe: true,          // 聽眾都能聽
+    canPublishData: true,        // data channel 可用
+    hidden: false
+  });
+
+  res.json({
+    token: at.toJwt(),
+    role: isSinger ? "singer" : "listener"
+  });
+});
 
 // ===== Socket.IO =====
 io.on("connection", socket => {
