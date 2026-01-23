@@ -7,7 +7,7 @@ import dotenv from "dotenv";
 import path from "path";
 import fs from "fs";
 import fetch from "node-fetch"; // Node 18+ 可直接用 fetch
-import { AccessToken } from "livekit-server-sdk"; // ✅ 舊版寫法，只需 AccessToken
+import { AccessToken } from "livekit-server-sdk"; // ✅ 舊版本 v2.x 用 addGrant
 
 import { pool } from "./db.js";
 import { authRouter } from "./auth.js";
@@ -15,7 +15,7 @@ import { aiRouter } from "./ai.js";
 import { songRouter } from "./song.js";
 import { chatHandlers } from "./chat.js";
 import { songSocket } from "./socketHandlers.js";
-import { songState } from "./song.js";
+import { songState } from "./song.js"; // 判斷誰是歌手
 
 dotenv.config();
 
@@ -61,36 +61,39 @@ app.use("/ai", aiRouter);
 app.use("/song", songRouter);
 
 // ===== LiveKit Token API =====
-app.get("/livekit-token", (req, res) => {
+app.get("/livekit-token", async (req, res) => {
   const { room, name } = req.query;
 
-  if (!room || !name) {
-    return res.status(400).json({ error: "missing room or name" });
-  }
+  if (!room || !name) return res.status(400).json({ error: "missing room or name" });
 
   const state = songState[room];
-  const isSinger = state && state.currentSinger === name; // 是否輪到唱
+  const isSinger = state && state.currentSinger === name;
 
-  // 產生 LiveKit token (舊版 SDK 寫法)
-  const at = new AccessToken(
-    process.env.LIVEKIT_API_KEY,
-    process.env.LIVEKIT_API_SECRET,
-    { identity: name, ttl: 600 } // 10 分鐘
-  );
+  try {
+    const at = new AccessToken(
+      process.env.LIVEKIT_API_KEY,
+      process.env.LIVEKIT_API_SECRET,
+      { identity: name, ttl: "10m" } // 10 分鐘
+    );
 
-  at.addGrant({
-    room: room,
-    roomJoin: true,
-    canPublish: isSinger, // 🎤 只有輪到的人能開 mic
-    canSubscribe: true,   // 聽眾都能聽
-    canPublishData: true, // DataChannel
-    hidden: false,
-  });
+    at.addGrant({
+      room: room,
+      roomJoin: true,
+      canPublish: isSinger, // 只有輪到唱的人能開 mic
+      canSubscribe: true,   // 聽眾都能收聽
+      canPublishData: true, // data channel 可用
+    });
 
-  res.json({
-    token: at.toJwt(), // ✅ 這裡一定是字串 JWT
-    role: isSinger ? "singer" : "listener",
-  });
+    const token = await at.toJwt();
+
+    res.json({
+      token,
+      role: isSinger ? "singer" : "listener",
+    });
+  } catch (err) {
+    console.error("[LiveKit Token] Error:", err);
+    res.status(500).json({ error: "LiveKit token generation failed" });
+  }
 });
 
 // ===== Socket.IO =====
@@ -100,7 +103,7 @@ io.on("connection", (socket) => {
   // 聊天 / AI
   chatHandlers(io, socket);
 
-  // 唱歌 / 評分
+  // 唱歌 / queue / 評分
   songSocket(io, socket);
 
   socket.on("disconnect", () => {
@@ -109,11 +112,10 @@ io.on("connection", (socket) => {
 });
 
 // ===== Heartbeat for Render =====
-const HEARTBEAT_INTERVAL = 60 * 1000; // 1 分鐘
+const HEARTBEAT_INTERVAL = 1 * 60 * 1000; // 每 1 分鐘
 setInterval(async () => {
   try {
-    const url =
-      process.env.SELF_URL || `http://localhost:${process.env.PORT || 10000}/`;
+    const url = process.env.SELF_URL || `http://localhost:${process.env.PORT || 10000}/`;
     const res = await fetch(url);
     console.log(`[Heartbeat] ${new Date().toISOString()} - Status: ${res.status}`);
   } catch (err) {
