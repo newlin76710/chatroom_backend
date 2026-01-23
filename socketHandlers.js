@@ -11,14 +11,14 @@ export function songSocket(io, socket) {
 
     io.to(room).emit("micStateUpdate", {
       queue: state.queue.map(u => u.name),
-      currentSinger: state.currentSinger || null
+      currentSinger: state.currentSinger || null,
     });
 
     console.log(`[Debug] broadcastMicState for room "${room}": currentSinger=${state.currentSinger}, queue=[${state.queue.map(u => u.name).join(", ")}]`);
   }
 
   // 發送 LiveKit token 給指定 socket
-  function sendLiveKitToken(socketId, room, identity) {
+  async function sendLiveKitToken(socketId, room, identity) {
     const token = new AccessToken(
       process.env.LIVEKIT_API_KEY,
       process.env.LIVEKIT_API_SECRET,
@@ -28,17 +28,18 @@ export function songSocket(io, socket) {
     token.addGrant({
       room,
       roomJoin: true,
-      canPublish: true,      // 只有輪到唱的人能 publish
-      canSubscribe: true,    // 聽眾可收聽
-      canPublishData: true,  // DataChannel 可用
+      canPublish: true,
+      canSubscribe: true,
+      canPublishData: true,
     });
 
-    console.log(`[Debug] Sending LiveKit token to "${identity}" in room "${room}"`);
-    io.to(socketId).emit("livekit-token", { token: token.toJwt(), identity });
+    const jwt = await token.toJwt(); // ✅ 必須 await
+    console.log(`[Debug] Sending LiveKit JWT token to "${identity}" in room "${room}": ${jwt}`);
+    io.to(socketId).emit("livekit-token", { token: jwt, identity });
   }
 
   // 播放下一位歌手
-  function playNextSinger(room) {
+  async function playNextSinger(room) {
     const state = songState[room];
     if (!state || !state.queue.length) return;
 
@@ -46,52 +47,35 @@ export function songSocket(io, socket) {
     state.currentSinger = nextSinger.name;
     state.currentSingerSocketId = nextSinger.socketId;
 
-    console.log(`[Debug] Next singer for room "${room}": ${state.currentSinger}`);
     broadcastMicState(room);
 
     // 發送 LiveKit token 給下一位
-    sendLiveKitToken(nextSinger.socketId, room, nextSinger.socketId); // 使用 socketId 當 identity
+    await sendLiveKitToken(nextSinger.socketId, room, nextSinger.name);
   }
-  // 監聽前端請求 token
-  socket.on("requestLiveKitToken", ({ room, singer }) => {
-    console.log(`[Debug] requestLiveKitToken from ${singer} in room ${room}`);
-    sendLiveKitToken(socket.id, room, singer);
-  });
-  // 加入 queue
-  socket.on("joinQueue", ({ room, singer }) => {
-    console.log(`🟢 join ${room} ${singer} (${socket.id})`);
 
-    if (!songState[room])
-      songState[room] = { queue: [], currentSinger: null, currentSingerSocketId: null };
+  // 搶 Mic / 踢掉正在唱的人
+  socket.on("grabMic", async ({ room, singer }) => {
+    if (!songState[room]) songState[room] = { queue: [], currentSinger: null, currentSingerSocketId: null };
     const state = songState[room];
 
-    if (!state.queue.find(u => u.name === singer) && state.currentSinger !== singer) {
-      state.queue.push({ name: singer, socketId: socket.id });
+    // 如果有人正在唱，踢掉他
+    if (state.currentSingerSocketId && state.currentSingerSocketId !== socket.id) {
+      console.log(`[Debug] ${singer} 踢掉 ${state.currentSinger}`);
+      io.to(state.currentSingerSocketId).emit("forceStopSing");
+      state.queue.unshift({ name: state.currentSinger, socketId: state.currentSingerSocketId }); // 放回 queue
     }
 
-    if (!state.currentSinger) {
-      console.log(`[Debug] No current singer, calling playNextSinger for room "${room}"`);
-      playNextSinger(room);
-    } else {
-      broadcastMicState(room);
-    }
-  });
+    // 設自己為當前歌手
+    state.currentSinger = singer;
+    state.currentSingerSocketId = socket.id;
 
-  // 離開 queue
-  socket.on("leaveQueue", ({ room, singer }) => {
-    const state = songState[room];
-    if (!state) return;
+    // 從 queue 移除自己
+    state.queue = state.queue.filter(u => u.socketId !== socket.id);
 
-    state.queue = state.queue.filter(u => u.name !== singer);
+    broadcastMicState(room);
 
-    if (state.currentSinger === singer) {
-      state.currentSinger = null;
-      state.currentSingerSocketId = null;
-      if (state.queue.length > 0) playNextSinger(room);
-      else broadcastMicState(room);
-    } else {
-      broadcastMicState(room);
-    }
+    // 發 token 給自己
+    await sendLiveKitToken(socket.id, room, singer);
   });
 
   // 停止唱歌
@@ -100,7 +84,6 @@ export function songSocket(io, socket) {
     if (!state) return;
 
     if (state.currentSinger === singer) {
-      console.log(`[Debug] stopSing: ${singer} stopped singing in room "${room}"`);
       state.currentSinger = null;
       state.currentSingerSocketId = null;
       if (state.queue.length > 0) playNextSinger(room);
@@ -108,10 +91,8 @@ export function songSocket(io, socket) {
     }
   });
 
-  // 斷線處理
+  // 強制斷線停止
   socket.on("disconnect", () => {
-    console.log(`[Debug] Socket disconnected: ${socket.id}`);
-
     for (const room in songState) {
       const state = songState[room];
       if (!state) continue;
@@ -120,7 +101,6 @@ export function songSocket(io, socket) {
       state.queue = state.queue.filter(u => u.socketId !== socket.id);
 
       if (state.currentSingerSocketId === socket.id) {
-        console.log(`[Debug] Current singer disconnected in room "${room}": ${state.currentSinger}`);
         state.currentSinger = null;
         state.currentSingerSocketId = null;
         if (state.queue.length > 0) playNextSinger(room);
