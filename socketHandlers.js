@@ -52,7 +52,11 @@ export function songSocket(io, socket) {
     // 發送 LiveKit token 給下一位
     sendLiveKitToken(nextSinger.socketId, room, nextSinger.socketId); // 使用 socketId 當 identity
   }
-
+  // 監聽前端請求 token
+  socket.on("requestLiveKitToken", ({ room, singer }) => {
+    console.log(`[Debug] requestLiveKitToken from ${singer} in room ${room}`);
+    sendLiveKitToken(socket.id, room, singer);
+  });
   // 加入 queue
   socket.on("joinQueue", ({ room, singer }) => {
     console.log(`🟢 join ${room} ${singer} (${socket.id})`);
