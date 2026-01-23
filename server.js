@@ -60,39 +60,36 @@ app.use("/auth", authRouter);
 app.use("/ai", aiRouter);
 app.use("/song", songRouter);
 
-// ===== LiveKit Token API =====
+// app.get("/livekit-token")
 app.get("/livekit-token", async (req, res) => {
-  const { room, userId } = req.query;
-  if (!room) return res.status(400).json({ error: "missing room" });
-
-  // 用 socket.id 當身份，如果前端沒有傳 userId 就生成 guest
-  const identity = userId || "guest-" + Math.random().toString(36).substring(2, 8);
+  const { room, name } = req.query;  // 改成 name
+  if (!room || !name) return res.status(400).json({ error: "missing room or name" });
 
   const state = songState[room];
-  const isSinger = state?.currentSingerSocketId === identity;
+  const isSinger = state?.currentSinger === name; // 判斷是不是正在唱的人
 
   try {
     const at = new AccessToken(
       process.env.LIVEKIT_API_KEY,
       process.env.LIVEKIT_API_SECRET,
-      { identity, ttl: "10m" } // 10 分鐘
+      { identity: name, ttl: "10m" } // 用 name 當 identity
     );
 
     at.addGrant({
       room: room,
       roomJoin: true,
-      canPublish: isSinger,  // 只有輪到唱的人能發送音訊
-      canSubscribe: true,    // 所有人都能收聽
-      canPublishData: true,  // data channel
+      canPublish: isSinger,   // 只有當前歌手可以發音訊
+      canSubscribe: true,     // 所有人可收聽
+      canPublishData: true,
     });
 
     const token = await at.toJwt();
 
-    console.log(`[LiveKit Token] ${identity} in room ${room} as ${isSinger ? "singer" : "listener"}`);
+    console.log(`[LiveKit Token] ${name} in room ${room} as ${isSinger ? "singer" : "listener"}`);
 
     res.json({
       token,
-      identity,
+      identity: name,
       role: isSinger ? "singer" : "listener",
     });
   } catch (err) {
