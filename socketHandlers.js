@@ -1,8 +1,10 @@
+// socketHandlers.js
 import { songState } from "./song.js";
 import { AccessToken } from "livekit-server-sdk";
 
 export function songSocket(io, socket) {
 
+  // 廣播當前隊列與正在唱的人
   function broadcastMicState(room) {
     const state = songState[room];
     if (!state) return;
@@ -11,27 +13,31 @@ export function songSocket(io, socket) {
       queue: state.queue.map(u => u.name),
       currentSinger: state.currentSinger || null
     });
+
+    console.log(`[Debug] broadcastMicState for room "${room}": currentSinger=${state.currentSinger}, queue=[${state.queue.map(u => u.name).join(", ")}]`);
   }
 
-  function sendLiveKitToken(socketId, room, singer) {
+  // 發送 LiveKit token 給指定 socket
+  function sendLiveKitToken(socketId, room, identity) {
     const token = new AccessToken(
       process.env.LIVEKIT_API_KEY,
       process.env.LIVEKIT_API_SECRET,
-      { identity: singer, ttl: 600 } // 10 分鐘
+      { identity, ttl: 600 } // 10 分鐘
     );
 
     token.addGrant({
       room,
       roomJoin: true,
-      canPublish: true,
-      canSubscribe: true,
-      canPublishData: true
+      canPublish: true,      // 只有輪到唱的人能 publish
+      canSubscribe: true,    // 聽眾可收聽
+      canPublishData: true,  // DataChannel 可用
     });
 
-    console.log(`[Debug] Sending LiveKit token to "${singer}" in room "${room}"`);
-    io.to(socketId).emit("livekit-token", { token: token.toJwt() });
+    console.log(`[Debug] Sending LiveKit token to "${identity}" in room "${room}"`);
+    io.to(socketId).emit("livekit-token", { token: token.toJwt(), identity });
   }
 
+  // 播放下一位歌手
   function playNextSinger(room) {
     const state = songState[room];
     if (!state || !state.queue.length) return;
@@ -44,7 +50,7 @@ export function songSocket(io, socket) {
     broadcastMicState(room);
 
     // 發送 LiveKit token 給下一位
-    sendLiveKitToken(nextSinger.socketId, room, nextSinger.name);
+    sendLiveKitToken(nextSinger.socketId, room, nextSinger.socketId); // 使用 socketId 當 identity
   }
 
   // 加入 queue
@@ -90,6 +96,7 @@ export function songSocket(io, socket) {
     if (!state) return;
 
     if (state.currentSinger === singer) {
+      console.log(`[Debug] stopSing: ${singer} stopped singing in room "${room}"`);
       state.currentSinger = null;
       state.currentSingerSocketId = null;
       if (state.queue.length > 0) playNextSinger(room);
@@ -109,6 +116,7 @@ export function songSocket(io, socket) {
       state.queue = state.queue.filter(u => u.socketId !== socket.id);
 
       if (state.currentSingerSocketId === socket.id) {
+        console.log(`[Debug] Current singer disconnected in room "${room}": ${state.currentSinger}`);
         state.currentSinger = null;
         state.currentSingerSocketId = null;
         if (state.queue.length > 0) playNextSinger(room);
