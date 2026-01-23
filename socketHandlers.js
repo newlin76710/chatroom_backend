@@ -1,4 +1,4 @@
-// songSocket.js
+// socketHandlers.js
 import { songState } from "./song.js";
 import { AccessToken } from "livekit-server-sdk";
 
@@ -11,7 +11,24 @@ export function songSocket(io, socket) {
       queue: state.queue.map(u => u.name),
       currentSinger: state.currentSinger || null
     });
-    console.log(`[Queue] Room: ${room}, CurrentSinger: ${state.currentSinger}, Queue: ${state.queue.map(u => u.name).join(", ")}`);
+  }
+
+  function sendLiveKitToken(socketId, room, singer) {
+    const token = new AccessToken(
+      process.env.LIVEKIT_API_KEY,
+      process.env.LIVEKIT_API_SECRET,
+      { identity: singer, ttl: 600 } // 10 分鐘
+    );
+
+    token.addGrant({
+      room,
+      roomJoin: true,
+      canPublish: true,
+      canSubscribe: true,
+      canPublishData: true
+    });
+
+    io.to(socketId).emit("livekit-token", { token: token.toJwt() });
   }
 
   function playNextSinger(room) {
@@ -23,35 +40,10 @@ export function songSocket(io, socket) {
     state.currentSingerSocketId = nextSinger.socketId;
 
     broadcastMicState(room);
-
-    // 🔑 自動發送 LiveKit Token 給輪到的人
-    const token = generateLiveKitToken(nextSinger.name, room);
-    io.to(nextSinger.socketId).emit("livekit-token", { token });
-
-    // 通知下一位開始唱
-    io.to(nextSinger.socketId).emit("update-room-phase", { phase: "singing", singer: nextSinger.name });
+    sendLiveKitToken(nextSinger.socketId, room, nextSinger.name);
   }
 
-  // 生成 LiveKit token
-  function generateLiveKitToken(name, room) {
-    const at = new AccessToken(
-      process.env.LIVEKIT_API_KEY,
-      process.env.LIVEKIT_API_SECRET,
-      { identity: name, ttl: 60 * 10 } // 10 分鐘
-    );
-
-    at.addGrant({
-      room,
-      roomJoin: true,
-      canPublish: true,      // 只有輪到的人可以唱
-      canSubscribe: true,
-      canPublishData: true,
-      hidden: false
-    });
-
-    return at.toJwt();
-  }
-
+  // 加入 queue
   socket.on("joinQueue", ({ room, singer }) => {
     if (!songState[room]) songState[room] = { queue: [], currentSinger: null, currentSingerSocketId: null };
     const state = songState[room];
@@ -64,6 +56,7 @@ export function songSocket(io, socket) {
     else broadcastMicState(room);
   });
 
+  // 離開 queue
   socket.on("leaveQueue", ({ room, singer }) => {
     const state = songState[room];
     if (!state) return;
@@ -77,6 +70,18 @@ export function songSocket(io, socket) {
       else broadcastMicState(room);
     } else {
       broadcastMicState(room);
+    }
+  });
+
+  socket.on("stopSing", ({ room, singer }) => {
+    const state = songState[room];
+    if (!state) return;
+
+    if (state.currentSinger === singer) {
+      state.currentSinger = null;
+      state.currentSingerSocketId = null;
+      if (state.queue.length > 0) playNextSinger(room);
+      else broadcastMicState(room);
     }
   });
 
