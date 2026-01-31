@@ -8,14 +8,17 @@ import path from "path";
 import fs from "fs";
 import fetch from "node-fetch"; // Node 18+ 可直接用 fetch
 import { AccessToken } from "livekit-server-sdk"; // 舊版本 v2.x 用 addGrant
-
 import { pool } from "./db.js";
+import { adminRouter } from "./admin.js";
 import { authRouter } from "./auth.js";
 import { aiRouter } from "./ai.js";
 import { songRouter } from "./song.js";
-import { chatHandlers } from "./chat.js";
+import { rooms, chatHandlers } from "./chat.js";
 import { songSocket } from "./socketHandlers.js";
 import { songState } from "./song.js"; // 判斷誰是歌手
+import { quickPhrasesRouter } from "./quickPhrase.js";
+import { ipRouter } from "./blockIP.js";
+import { announcementRouter } from "./announcementRouter.js";
 
 dotenv.config();
 
@@ -23,15 +26,13 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: [
-      "http://localhost:5173",
-      "https://boygirl.ek21.com",
-      "https://windsong.ek21.com",
-    ],
+    origin: (origin, callback) => {
+      callback(null, true); // 允許所有 origin
+    },
     methods: ["GET", "POST"],
-    credentials: true,
+    credentials: true
   },
-  transports: ["websocket"],
+  transports: ["websocket"]
 });
 
 // ===== Upload dir =====
@@ -40,26 +41,36 @@ const uploadDir = path.join(__dirname, "uploads", "songs");
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
 
 // ===== Middleware =====
-app.use(
-  cors({
-    origin: [
-      "http://localhost:5173",
-      "https://boygirl.ek21.com",
-      "https://windsong.ek21.com",
-    ],
-    methods: ["GET", "POST"],
-    credentials: true,
-  })
-);
+app.use(cors({
+  origin: (origin, callback) => {
+    callback(null, true); // 允許所有 origin
+  },
+  methods: ["GET", "POST"],
+  credentials: true
+}));
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ extended: true }));
 app.use("/songs", express.static(uploadDir));
 
 // ===== Routes =====
+app.use("/admin", adminRouter);
 app.use("/auth", authRouter);
 app.use("/ai", aiRouter);
 app.use("/song", songRouter);
+app.use("/api/announcement", announcementRouter);
+app.use("/api/quick-phrases", quickPhrasesRouter);
+app.use("/api/blocked-ips", ipRouter);
+// 回傳房間使用者
+app.get("/getRoomUsers", (req, res) => {
+  const room = req.query.room;
+  if (!room) return res.status(400).json({ error: "缺少 room 參數" });
 
+  const users = rooms[room] || [];
+  // 這裡只回傳使用者簡單資訊，避免泄露 socketId 等
+  const simpleUsers = users.map(u => ({ name: u.name, type: u.type }));
+
+  res.json({ users: simpleUsers });
+});
 // app.get("/livekit-token")
 app.get("/livekit-token", async (req, res) => {
   const { room, name } = req.query;  // 改成 name
@@ -99,13 +110,13 @@ app.get("/livekit-token", async (req, res) => {
 });
 
 // ===== Socket.IO =====
-io.on("connection", (socket) => {
+io.on("connection", socket => {
   console.log(`[socket] ${socket.id} connected`);
 
   // 聊天 / AI
   chatHandlers(io, socket);
 
-  // 唱歌 / queue / 評分
+  // 唱歌 / 評分
   songSocket(io, socket);
 
   socket.on("disconnect", () => {
