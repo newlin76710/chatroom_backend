@@ -5,6 +5,7 @@ import { songState } from "./song.js";
 
 const AML = process.env.ADMIN_MAX_LEVEL || 99;
 const ANL = process.env.ADMIN_MIN_LEVEL || 91;
+const OPENAI = process.env.OPENAI === "true"
 export const rooms = {};
 export const roomContext = {};
 export const aiTimers = {};
@@ -135,7 +136,7 @@ export function chatHandlers(io, socket) {
         io.to(room).emit("videoUpdate", videoState[room].currentVideo);
         io.to(room).emit("videoQueueUpdate", videoState[room].queue);
 
-        startAIAutoTalk(io, room);
+        if(OPENAI) startAIAutoTalk(io, room);
     });
 
     // --- 聊天訊息 ---
