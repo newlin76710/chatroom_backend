@@ -60,7 +60,7 @@ messageBoardRouter.post("/create", authMiddleware, async (req, res) => {
 messageBoardRouter.post("/delete", authMiddleware, async (req, res) => {
   try {
     const { id } = req.body;
-    const { username, token, level } = req.user;
+    const { username, level } = req.user;
     const isAdmin = level >= AML;
 
     // 先找留言
@@ -74,11 +74,6 @@ messageBoardRouter.post("/delete", authMiddleware, async (req, res) => {
     }
 
     const message = result.rows[0];
-
-    // 權限判斷：版主或留言者本人可刪
-    if (!isAdmin && message.author_token !== token) {
-      return res.status(403).json({ error: "無權限刪除此留言" });
-    }
 
     await pool.query(`DELETE FROM message_board WHERE id=$1`, [id]);
     res.json({ success: true });
