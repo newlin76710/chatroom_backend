@@ -191,7 +191,7 @@ adminRouter.post("/message-logs", authMiddleware, async (req, res) => {
 });
 
 
-/* ================= 使用者等級清單（分頁 / 搜尋 / 過濾訪客） ================= */
+/* ================= 使用者等級清單（分頁 / 搜尋 / 過濾訪客 + 最近登入） ================= */
 adminRouter.post("/user-levels", authMiddleware, async (req, res) => {
   try {
     const user = req.user;
@@ -206,10 +206,10 @@ adminRouter.post("/user-levels", authMiddleware, async (req, res) => {
     } = req.body;
 
     const values = [];
-    let where = "WHERE account_type = 'account'";
+    let where = "WHERE u.account_type = 'account'";
 
     if (keyword) {
-      where += " AND username ILIKE $1";
+      where += " AND u.username ILIKE $1";
       values.push(`%${keyword}%`);
     }
 
@@ -217,18 +217,26 @@ adminRouter.post("/user-levels", authMiddleware, async (req, res) => {
 
     // 總筆數
     const totalRes = await pool.query(
-      `SELECT COUNT(*) FROM users ${where}`,
+      `SELECT COUNT(*) FROM users u ${where}`,
       values
     );
     const total = parseInt(totalRes.rows[0].count, 10);
 
-    // 資料
+    // 使用者資料 + 最近登入
     const dataRes = await pool.query(
       `
-      SELECT id, username, level, created_at
-      FROM users
+      SELECT 
+        u.id,
+        u.username,
+        u.level,
+        u.created_at,
+        MAX(l.login_at) AS last_login_at
+      FROM users u
+      LEFT JOIN login_logs l
+        ON u.username = l.username
       ${where}
-      ORDER BY level DESC, created_at ASC
+      GROUP BY u.id
+      ORDER BY u.level DESC, u.created_at ASC
       LIMIT $${values.length + 1} OFFSET $${values.length + 2}
       `,
       [...values, pageSize, offset]
@@ -245,7 +253,6 @@ adminRouter.post("/user-levels", authMiddleware, async (req, res) => {
     res.status(500).json({ error: "查詢失敗" });
   }
 });
-
 
 /* ================= 調整使用者等級 ================= */
 adminRouter.post("/set-user-level", authMiddleware, async (req, res) => {
@@ -282,5 +289,54 @@ adminRouter.post("/set-user-level", authMiddleware, async (req, res) => {
   } catch (err) {
     console.error("調整使用者等級失敗", err);
     res.status(500).json({ error: "操作失敗" });
+  }
+});
+
+/* ================= 刪除使用者（硬刪除） ================= */
+adminRouter.post("/delete-user", authMiddleware, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const admin = req.user;
+    const { username } = req.body;
+
+    if (!admin || admin.level < AML)
+      return res.status(403).json({ error: "權限不足" });
+
+    if (!username)
+      return res.status(400).json({ error: "缺少 username" });
+
+    if (username === admin.username)
+      return res.status(400).json({ error: "不能刪除自己" });
+
+    await client.query("BEGIN");
+
+    // 先確認目標使用者存在 & 等級
+    const targetRes = await client.query(
+      `SELECT id, level FROM users WHERE username = $1`,
+      [username]
+    );
+
+    if (!targetRes.rows.length)
+      throw new Error("使用者不存在");
+
+    const target = targetRes.rows[0];
+
+    if (target.level > admin.level)
+      throw new Error("不能刪除等級更高的使用者");
+
+    // 🔥 刪除 users
+    await client.query(
+      `DELETE FROM users WHERE username = $1`,
+      [username]
+    );
+
+    await client.query("COMMIT");
+    res.json({ success: true });
+  } catch (err) {
+    await client.query("ROLLBACK");
+    console.error("刪除使用者失敗", err);
+    res.status(400).json({ error: err.message || "刪除失敗" });
+  } finally {
+    client.release();
   }
 });
