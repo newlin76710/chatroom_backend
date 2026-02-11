@@ -21,6 +21,7 @@ messageBoardRouter.get("/", authMiddleware, async (req, res) => {
   }
 });
 
+
 /* ===== 新增留言 ===== */
 messageBoardRouter.post("/create", authMiddleware, async (req, res) => {
   try {
@@ -49,7 +50,7 @@ messageBoardRouter.post("/create", authMiddleware, async (req, res) => {
 messageBoardRouter.post("/delete", authMiddleware, async (req, res) => {
   try {
     const { id } = req.body;
-    const { username, level } = req.user;
+    const { username, token, level } = req.user;
     const isAdmin = level >= AML;
 
     // 先找留言
