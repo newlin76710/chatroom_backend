@@ -1,28 +1,26 @@
+// socketHandlers.js
 import { songState } from "./song.js";
 import { AccessToken } from "livekit-server-sdk";
 
 export function songSocket(io, socket) {
 
-  // 廣播 mic 狀態給前端
   function broadcastMicState(room) {
     const state = songState[room];
     if (!state) return;
 
     io.to(`song-${room}`).emit("micStateUpdate", {
-      queue: Array.from(state.queue.keys()), // 用 name 顯示
+      queue: Array.from(state.queue.keys()), // name array
       currentSinger: state.currentSinger || null,
     });
 
     console.log(`[Debug] broadcastMicState for room "${room}": currentSinger=${state.currentSinger}`);
   }
 
-  // 指派下一位 queue 裡的人去 grabMic
   function assignNextSinger(room) {
     const state = songState[room];
     if (!state) return;
 
-    // 已有人唱，不動
-    if (state.currentSinger) return;
+    if (state.currentSinger) return; // 已有人唱
 
     const firstEntry = state.queue.entries().next();
     if (firstEntry.done) {
@@ -31,12 +29,10 @@ export function songSocket(io, socket) {
     }
 
     const [name, user] = firstEntry.value;
-
     io.to(user.socketId).emit("pleaseGrabMic", { room, singer: name });
     broadcastMicState(room);
   }
 
-  // LiveKit token 發送
   async function sendLiveKitToken(socketId, room, identity) {
     const token = new AccessToken(
       process.env.LIVEKIT_API_KEY,
@@ -56,7 +52,6 @@ export function songSocket(io, socket) {
     io.to(socketId).emit("livekit-token", { token: jwt, identity });
   }
 
-  // 進入房間
   socket.on("joinRoom", ({ room, name }) => {
     if (!songState[room]) songState[room] = { queue: new Map(), currentSinger: null };
 
@@ -71,7 +66,7 @@ export function songSocket(io, socket) {
     console.log(`[Debug] ${name} 進入 song room ${room}`);
   });
 
-  // 加入排隊
+  // 點上麥 → 加入 queue
   socket.on("joinQueue", ({ room, name }) => {
     if (!songState[room]) songState[room] = { queue: new Map(), currentSinger: null };
     const state = songState[room];
@@ -84,17 +79,17 @@ export function songSocket(io, socket) {
     assignNextSinger(room);
   });
 
-  // grabMic 保持原邏輯（真正唱歌入口）
+  // 真正 grabMic
   socket.on("grabMic", async ({ room, singer }) => {
     const state = songState[room];
     if (!state) return;
 
-    // 必須是 queue Map 第一個
+    // 確保輪到第一個
     const firstEntry = state.queue.entries().next();
     if (firstEntry.done || firstEntry.value[0] !== singer) return;
 
     state.currentSinger = singer;
-    state.queue.delete(singer); // 從 queue 移除
+    state.queue.delete(singer);
 
     broadcastMicState(room);
 
@@ -102,7 +97,6 @@ export function songSocket(io, socket) {
     await sendLiveKitToken(socketId, room, singer);
   });
 
-  // 停止唱歌
   socket.on("stopSing", ({ room }) => {
     const state = songState[room];
     if (!state) return;
@@ -113,16 +107,15 @@ export function songSocket(io, socket) {
     }
   });
 
-  // 斷線
   socket.on("disconnect", () => {
     for (const room in songState) {
       const state = songState[room];
       if (!state) continue;
 
       // 如果斷線的是正在唱的人
-      const currentSingerName = state.currentSinger;
-      if (currentSingerName) {
-        const user = state.queue.get(currentSingerName);
+      if (state.currentSinger) {
+        const currentName = state.currentSinger;
+        const user = state.queue.get(currentName);
         if (!user || user.socketId === socket.id) {
           state.currentSinger = null;
           assignNextSinger(room);
