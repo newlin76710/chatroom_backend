@@ -86,6 +86,13 @@ export function songSocket(io, socket) {
 
     broadcastMicState(room);
   });
+  socket.on("leaveQueue", ({ room, name }) => {
+    const state = songState[room];
+    if (!state) return;
+
+    state.queue = state.queue.filter(u => u.socketId !== socket.id);
+    broadcastMicState(room);
+  });
 
   socket.on("grabMic", async ({ room, singer }) => {
     if (!songState[room]) songState[room] = { queue: [], currentSinger: null, currentSingerSocketId: null };
@@ -105,6 +112,31 @@ export function songSocket(io, socket) {
 
     // 發 token 給自己
     await sendLiveKitToken(socket.id, room, singer);
+  });
+
+  socket.on("forceStopSinger", ({ room, singer }) => {
+    const state = songState[room];
+    if (!state) return;
+
+    // 找到要踢的 socketId
+    const target = state.queue.find(u => u.name === singer) ||
+      (state.currentSinger === singer ? { socketId: state.currentSingerSocketId } : null);
+
+    if (!target || !target.socketId) return;
+
+    console.log(`[Debug] 管理員踢下麥: ${singer} in room ${room}`);
+
+    // 如果是正在唱的，直接 force stop
+    if (state.currentSinger === singer) {
+      io.to(target.socketId).emit("forceStopSing");
+      state.currentSinger = null;
+      state.currentSingerSocketId = null;
+      nextSinger(room);
+    }
+    // 如果在 queue 中，直接從 queue 移除
+    state.queue = state.queue.filter(u => u.name !== singer);
+    // 全體更新
+    broadcastMicState(room); // 全體更新
   });
 
   socket.on("stopSing", ({ room, singer }) => {
