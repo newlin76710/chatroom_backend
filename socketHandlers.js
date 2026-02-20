@@ -48,7 +48,10 @@ export function songSocket(io, socket) {
 
     state.currentSinger = next.name;
     state.currentSingerSocketId = next.socketId;
-
+    state.currentScore = {
+      total: 0,
+      count: 0
+    };
     // ⭐ 通知他輪到你
     io.to(next.socketId).emit("yourTurn", {});
 
@@ -106,12 +109,33 @@ export function songSocket(io, socket) {
 
     state.currentSinger = singer;
     state.currentSingerSocketId = socket.id;
+    state.currentScore = {
+      total: 0,
+      count: 0
+    };
     state.queue = state.queue.filter(u => u.socketId !== socket.id);
 
     broadcastMicState(room); // 全體更新
 
     // 發 token 給自己
     await sendLiveKitToken(socket.id, room, singer);
+  });
+
+  socket.on("adminMoveQueue", ({ room, fromIndex, toIndex }) => {
+    const state = songState[room];
+    if (!state) return;
+
+    if (
+      fromIndex < 0 ||
+      toIndex < 0 ||
+      fromIndex >= state.queue.length ||
+      toIndex >= state.queue.length
+    ) return;
+
+    const item = state.queue.splice(fromIndex, 1)[0];
+    state.queue.splice(toIndex, 0, item);
+
+    broadcastMicState(room);
   });
 
   socket.on("forceStopSinger", ({ room, singer }) => {
@@ -167,4 +191,27 @@ export function songSocket(io, socket) {
       state.queue = state.queue.filter(u => u.socketId !== socket.id);
     }
   });
+
+  socket.on("rateSinger", ({ room, singer, score }) => {
+    const state = songState[room];
+    if (!state) return;
+
+    if (!state.currentSinger || state.currentSinger !== singer) return;
+    if (!state.currentScore) return;
+    if (score < 1 || score > 5) return;
+
+    state.currentScore.total += score;
+    state.currentScore.count += 1;
+
+    const avg = (
+      state.currentScore.total / state.currentScore.count
+    ).toFixed(2);
+
+    io.to(`song-${room}`).emit("scoreUpdate", {
+      singer,
+      average: avg,
+      count: state.currentScore.count
+    });
+  });
+
 }
