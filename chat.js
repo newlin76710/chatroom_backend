@@ -3,7 +3,7 @@ import { callAI, aiNames, aiProfiles } from "./ai.js";
 import { expForNextLevel } from "./utils.js";
 import { songState } from "./song.js";
 import { ioTokens } from "./auth.js";
-
+import { addUserIP, removeUserIP } from "./ip.js";
 const AML = process.env.ADMIN_MAX_LEVEL || 99;
 const ANL = process.env.ADMIN_MIN_LEVEL || 91;
 const OPENAI = process.env.OPENAI === "true"
@@ -55,8 +55,9 @@ export function chatHandlers(io, socket) {
     // --- 進入房間 ---
     socket.on("joinRoom", async ({ room, user }) => {
         const state = getRoomState(room);
+        const ip = getClientIP(socket);
         socket.join(room);
-        
+
         if (!rooms[room]) rooms[room] = [];
 
         let name = user.name || "訪客" + Math.floor(Math.random() * 9999);
@@ -100,14 +101,37 @@ export function chatHandlers(io, socket) {
             // 更新 token 綁定
             ioTokens.set(token, {
                 username: name,
-                socketId: socket.id
+                socketId: socket.id,
+                ip
             });
         }
 
         // 加入或更新房間列表
-        rooms[room].push({ id: socket.id, socketId: socket.id, name, type, level, exp, gender, avatar });
+        const exists = rooms[room].find(u => u.name === name);
+        if (!exists) {
+            rooms[room].push({ id: socket.id, socketId: socket.id, name, type, level, exp, gender, avatar });
+        } else {
+            const oldSocket = io.sockets.sockets.get(exists.socketId);
+            if (oldSocket) {
+                oldSocket.emit("forceLogout", {
+                    reason: "帳號已在其他地方登入"
+                });
+                oldSocket.disconnect(true);
+                console.log("踢掉重複forceLogout", room, exists.socketId, name);
+            }
+            // 如果已存在，更新 socketId 或其他資訊
+            exists.id = socket.id;
+            exists.socketId = socket.id;
+            exists.level = level;
+            exists.exp = exp;
+            exists.gender = gender;
+            exists.avatar = avatar;
+            exists.type = type;
+            console.log("重複登入", room, socket.id, name);
+        }
 
         onlineUsers.set(name, Date.now());
+        addUserIP(ip, name);
 
         // 加入 AI（如果沒加入過）
         aiNames.forEach(ai => {
@@ -147,6 +171,23 @@ export function chatHandlers(io, socket) {
         // ⭐ 加上 ip
         const ip = getClientIP(socket);
         const msgPayload = { user, message, target: target || "", mode, color, ip };
+        // 廣播訊息
+        if (mode === "private" && target) {
+            const sockets = Array.from(io.sockets.sockets.values());
+            sockets.forEach(s => {
+                // 私聊對象收到訊息
+                if (s.data?.name === target || s.data?.name === user.name) {
+                    s.emit("message", msgPayload);
+                }
+                // ⭐ Lv.99 監控私聊
+                else if (Number(s.data?.level) === Number(AML)) {
+                    s.emit("message", { ...msgPayload, monitored: true });
+                }
+            });
+        } else {
+            // 公聊直接廣播
+            io.to(room).emit("message", msgPayload);
+        }
 
         // 更新 EXP / LV
         try {
@@ -177,24 +218,6 @@ export function chatHandlers(io, socket) {
             }
         } catch (err) {
             console.error("更新 EXP/LV/使用者資料 失敗：", err);
-        }
-
-        // 廣播訊息
-        if (mode === "private" && target) {
-            const sockets = Array.from(io.sockets.sockets.values());
-            sockets.forEach(s => {
-                // 私聊對象收到訊息
-                if (s.data?.name === target || s.data?.name === user.name) {
-                    s.emit("message", msgPayload);
-                }
-                // ⭐ Lv.99 監控私聊
-                else if (Number(s.data?.level) === Number(AML)) {
-                    s.emit("message", { ...msgPayload, monitored: true });
-                }
-            });
-        } else {
-            // 公聊直接廣播
-            io.to(room).emit("message", msgPayload);
         }
 
         // ⭐ 寫入 DB（使用者）
@@ -317,7 +340,7 @@ export function chatHandlers(io, socket) {
         if (!room || !rooms[room]) return;
 
         const wasInRoom = rooms[room].some(u => u.id === socket.id);
-
+        const ip = getClientIP(socket);
         rooms[room] = rooms[room].filter(u => u.id !== socket.id);
         socket.leave(room);
 
@@ -334,6 +357,7 @@ export function chatHandlers(io, socket) {
         }
         if (!name) return;
         onlineUsers.delete(name);
+        removeUserIP(ip, name)
     };
 
     socket.on("leaveRoom", removeUser);
