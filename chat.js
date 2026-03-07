@@ -1,7 +1,7 @@
 import { pool } from "./db.js";
 import { callAI, aiNames, aiProfiles } from "./ai.js";
 import { expForNextLevel } from "./utils.js";
-import { songState } from "./song.js";
+import { songState } from "./socketHandlers.js";
 import { ioTokens } from "./auth.js";
 import { addUserIP, removeUserIP } from "./ip.js";
 const AML = process.env.ADMIN_MAX_LEVEL || 99;
@@ -80,6 +80,7 @@ export function chatHandlers(io, socket) {
         let level = 1, exp = 0, gender = "女", avatar = "/avatars/g01.gif";
         let type = user.type || "guest";
         let token = user.token || "";
+        let gold_apples = 0;
         if (type === "guest" && !GUEST) {
             socket.emit("joinFailed", { reason: "本聊天室禁止訪客登入" });
             socket.disconnect(true); // 🔹 直接斷線，不會進 rooms[room]
@@ -89,7 +90,7 @@ export function chatHandlers(io, socket) {
             const res = await pool.query(
                 `
                 SELECT u.username, u.gender, u.avatar,
-                    urs.level, urs.exp
+                    urs.level, urs.exp, urs.gold_apples
                 FROM users u
                 LEFT JOIN user_room_stats urs
                 ON u.id = urs.user_id AND urs.room = $2
@@ -102,6 +103,7 @@ export function chatHandlers(io, socket) {
                 name = dbUser.username;
                 level = dbUser.level || 1;
                 exp = dbUser.exp || 0;
+                gold_apples = dbUser.gold_apples || 0;
                 gender = dbUser.gender || "女";
                 avatar = dbUser.avatar || avatar;
                 type = type === "account" ? "account" : type;
@@ -111,7 +113,7 @@ export function chatHandlers(io, socket) {
         }
         console.log("🟢 join", room, socket.id, name);
         // 更新 socket.data
-        socket.data = { room, name, level, exp, gender, avatar, type };
+        socket.data = { room, name, level, exp, gold_apples, gender, avatar, type };
 
         // 🔥 用 token 判斷真正雙開
         if (token) {
@@ -137,7 +139,7 @@ export function chatHandlers(io, socket) {
         // 加入或更新房間列表
         const exists = rooms[room].find(u => u.name === name);
         if (!exists) {
-            rooms[room].push({ id: socket.id, socketId: socket.id, name, type, level, exp, gender, avatar });
+            rooms[room].push({ id: socket.id, socketId: socket.id, name, type, level, exp, gold_apples, gender, avatar });
         } else {
             const oldSocket = io.sockets.sockets.get(exists.socketId);
             if (oldSocket) {
@@ -152,6 +154,7 @@ export function chatHandlers(io, socket) {
             exists.socketId = socket.id;
             exists.level = level;
             exists.exp = exp;
+            exists.gold_apples = gold_apples;
             exists.gender = gender;
             exists.avatar = avatar;
             exists.type = type;
@@ -243,7 +246,8 @@ export function chatHandlers(io, socket) {
         try {
             const res = await pool.query(
                 `
-                SELECT u.id, urs.level, urs.exp, u.gender, u.avatar, u.account_type
+                SELECT u.id, urs.level, urs.exp, urs.gold_apples, 
+                u.gender, u.avatar, u.account_type
                 FROM users u
                 JOIN user_room_stats urs
                 ON u.id = urs.user_id
@@ -254,7 +258,7 @@ export function chatHandlers(io, socket) {
             );
             const dbUser = res.rows[0];
             if (dbUser) {
-                let { level, exp, gender, avatar, account_type } = dbUser;
+                let { level, exp, gold_apples, gender, avatar, account_type } = dbUser;
                 exp += 5;
                 while (level < 90 && exp >= expForNextLevel(level)) {
                     exp -= expForNextLevel(level);
@@ -263,16 +267,17 @@ export function chatHandlers(io, socket) {
                 await pool.query(
                     `
                     UPDATE user_room_stats
-                    SET level = $1, exp = $2
-                    WHERE user_id = $3 AND room = $4
+                    SET level = $1, exp = $2, gold_apples = $3
+                    WHERE user_id = $4 AND room = $5
                     `,
-                    [level, exp, dbUser.id, room]
+                    [level, exp, gold_apples, dbUser.id, room]
                 );
                 if (rooms[room]) {
                     const roomUser = rooms[room].find(u => u.name === user.name);
                     if (roomUser) {
                         roomUser.level = level;
                         roomUser.exp = exp;
+                        roomUser.gold_apples = gold_apples;
                         roomUser.gender = gender;
                         roomUser.avatar = avatar || roomUser.avatar || "/avatars/g01.gif";
                         roomUser.type = account_type || roomUser.type || "guest";

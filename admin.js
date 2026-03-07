@@ -6,7 +6,7 @@ import { authMiddleware } from "./auth.js"; // 驗證 token 並填 req.user
 export const adminRouter = express.Router();
 const AML = process.env.ADMIN_MAX_LEVEL || 99;
 const ROOM = process.env.ROOMNAME || 'windsong';
-
+const MAX_GOLD_APPLES = parseInt(process.env.MAX_GOLD_APPLES || "9999", 10);
 /* ================= 登入紀錄 API（支援分頁 / 日期） ================= */
 adminRouter.post("/login-logs", authMiddleware, async (req, res) => {
   try {
@@ -127,6 +127,7 @@ adminRouter.post("/user-levels", authMiddleware, async (req, res) => {
         u.username,
         s.level,
         s.exp,
+        s.gold_apples,
         u.created_at,
         MAX(l.login_at) AS last_login_at
       FROM user_room_stats s
@@ -134,7 +135,7 @@ adminRouter.post("/user-levels", authMiddleware, async (req, res) => {
       LEFT JOIN login_logs l
         ON u.username = l.username
       ${where}
-      GROUP BY u.id, s.level, s.exp
+      GROUP BY u.id, s.level, s.exp, s.gold_apples
       ORDER BY s.level DESC, s.exp DESC, u.created_at ASC
       LIMIT $${values.length + 1} OFFSET $${values.length + 2}
       `,
@@ -441,3 +442,4 @@ adminRouter.post("/my-message-logs", authMiddleware, async (req, res) => {
     res.status(500).json({ error: "查詢失敗" });
   }
 });
+

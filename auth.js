@@ -98,18 +98,19 @@ export const authMiddleware = async (req, res, next) => {
 
     // 再抓 user_room_stats 該 room 的等級/經驗
     const statsRes = await pool.query(
-      `SELECT level, exp
+      `SELECT level, exp, gold_apples
        FROM user_room_stats
        WHERE user_id=$1 AND room=$2`,
       [user.id, room]
     );
 
-    const stats = statsRes.rowCount ? statsRes.rows[0] : { level: 1, exp: 0 };
+    const stats = statsRes.rowCount ? statsRes.rows[0] : { level: 1, exp: 0, gold_apples: 0 };
 
     req.user = {
       ...user,
       level: stats.level,
       exp: stats.exp,
+      gold_apples: stats.gold_apples,
       room
     };
 
@@ -133,6 +134,7 @@ authRouter.get("/me", authMiddleware, async (req, res) => {
       account_type: user.account_type,
       level: user.level,
       exp: user.exp,
+      gold_apples: user.gold_apples,
       room: user.room,
     });
   } catch (err) {
@@ -398,23 +400,55 @@ authRouter.post("/login", async (req, res) => {
     // ====== 處理聊天室等級/經驗 ======
     const room = ROOM; // 或者 req.body.room
     let statsRes = await pool.query(
-      `SELECT level, exp FROM user_room_stats WHERE user_id=$1 AND room=$2`,
+      `SELECT level, exp, gold_apples, last_login_reward 
+   FROM user_room_stats 
+   WHERE user_id=$1 AND room=$2`,
       [user.id, room]
     );
 
-    let level, exp;
+    let level, exp, gold_apples;
+    const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+
+    let rewardApple = 0;
+
     if (!statsRes.rowCount) {
-      // 如果沒有該聊天室紀錄，給預設 2 等 0 exp
       level = 2;
       exp = 0;
+      gold_apples = 1;
+      rewardApple = 1;
+
       await pool.query(
-        `INSERT INTO user_room_stats (user_id, username, room, level, exp) VALUES ($1,$2,$3,$4,$5)`,
-        [user.id, user.username, room, level, exp]
+        `INSERT INTO user_room_stats 
+     (user_id, username, room, level, exp, gold_apples, last_login_reward) 
+     VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+        [user.id, user.username, room, level, exp, gold_apples, today]
       );
     } else {
-      level = statsRes.rows[0].level;
-      exp = statsRes.rows[0].exp;
+      const stats = statsRes.rows[0];
+      level = stats.level;
+      exp = stats.exp;
+      gold_apples = stats.gold_apples || 0;
+
+      // 將資料庫時間轉 YYYY-MM-DD 字串比較
+      const lastReward = stats.last_login_reward
+        ? stats.last_login_reward.toISOString().slice(0, 10)
+        : null;
+
+      if (lastReward !== today) {
+        rewardApple = 1;
+        gold_apples += 1;
+
+        await pool.query(
+          `UPDATE user_room_stats
+       SET gold_apples = $1,
+           last_login_reward = $2
+       WHERE user_id=$3 AND room=$4`,
+          [gold_apples, today, user.id, room]
+        );
+      }
     }
+
+    console.log("[Debug] 最後結果 -> name:", username, "level:", level, "exp:", exp, "gold_apples:", gold_apples, "rewardApple:", rewardApple);
 
     const now = new Date();
     const token = crypto.randomUUID();
@@ -451,10 +485,12 @@ authRouter.post("/login", async (req, res) => {
       name: user.username,
       level,
       exp,
+      gold_apples,
       gender: user.gender,
       avatar: user.avatar,
       last_login: now,
-      room
+      room,
+      reward_apple: rewardApple
     });
   } catch (err) {
     console.error(err);

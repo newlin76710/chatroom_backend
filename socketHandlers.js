@@ -1,9 +1,8 @@
 import { pool } from "./db.js";
 import { expForNextLevel } from "./utils.js";
-import { songState } from "./song.js";
 import { rooms, pendingReconnect } from "./chat.js";
 import { AccessToken } from "livekit-server-sdk";
-
+export const songState = {};
 export function songSocket(io, socket) {
   // ===== 給唱歌超過 2 分鐘加 EXP =====
   async function giveExpForSinging(room, singer) {
@@ -12,21 +11,20 @@ export function songSocket(io, socket) {
 
     const MINUTE_2 = 2 * 60 * 1000;
     const expToAdd = 100;
+    const applesToAdd = 2; // ⭐ 每次唱歌給 2 顆金蘋果
 
     const duration = Date.now() - state.singStartTime;
-    state.singStartTime = null; // ⭐ 清掉計時器 / 時間紀錄
+    state.singStartTime = null; // 清掉計時器 / 時間紀錄
 
     if (duration < MINUTE_2) return; // 未達 2 分鐘，不加
 
     try {
       const res = await pool.query(
         `
-            SELECT u.id, urs.level, urs.exp
+            SELECT u.id, urs.level, urs.exp, urs.gold_apples
             FROM users u
-            JOIN user_room_stats urs
-            ON u.id = urs.user_id
-            WHERE u.username = $1
-            AND urs.room = $2
+            JOIN user_room_stats urs ON u.id = urs.user_id
+            WHERE u.username = $1 AND urs.room = $2
             `,
         [singer, room]
       );
@@ -34,33 +32,39 @@ export function songSocket(io, socket) {
       const dbUser = res.rows[0];
       if (!dbUser) return;
 
-      let { level, exp } = dbUser;
+      let { level, exp, gold_apples } = dbUser;
       exp += expToAdd;
+      gold_apples += applesToAdd;
 
       while (level < 90 && exp >= expForNextLevel(level)) {
         exp -= expForNextLevel(level);
         level += 1;
       }
+
+      // 更新 DB
       await pool.query(
         `
             UPDATE user_room_stats
-            SET level = $1, exp = $2
-            WHERE user_id = $3 AND room = $4
+            SET level = $1, exp = $2, gold_apples = $3
+            WHERE user_id = $4 AND room = $5
             `,
-        [level, exp, dbUser.id, room]
+        [level, exp, gold_apples, dbUser.id, room]
       );
 
-      // 更新記憶體 rooms[room]
+      // 🔹 更新記憶體
       if (rooms[room]) {
         const roomUser = rooms[room].find(u => u.name === singer);
         if (roomUser) {
           roomUser.level = level;
           roomUser.exp = exp;
+          roomUser.gold_apples = gold_apples;
         }
       }
 
+      // 🔹 廣播整個使用者列表給前端
       io.to(room).emit("updateUsers", rooms[room]);
-      console.log(`[Debug] ${singer} +${expToAdd} EXP (唱歌超過 2 分鐘)`);
+
+      console.log(`[Debug] ${singer} +${expToAdd} EXP, +${applesToAdd} 🍎 (唱歌超過 2 分鐘)`);
     } catch (err) {
       console.error("給 EXP 失敗：", err);
     }
@@ -69,12 +73,10 @@ export function songSocket(io, socket) {
   function broadcastMicState(room) {
     const state = songState[room];
     if (!state) return;
-
     io.to(`song-${room}`).emit("micStateUpdate", {
       queue: state.queue.map(u => u.name),
       currentSinger: state.currentSinger || null,
     });
-
     console.log(`[Debug] broadcastMicState for room "${room}": currentSinger=${state.currentSinger} queue=${state.queue.map(u => u.name)}`);
   }
 
@@ -168,7 +170,7 @@ export function songSocket(io, socket) {
       name,
       socketId: socket.id,
     });
-
+    console.log(`[Debug] ${name} 加入 song queue ${room}`);
     broadcastMicState(room);
   });
   socket.on("leaveQueue", ({ room, name }) => {
@@ -262,22 +264,34 @@ export function songSocket(io, socket) {
   socket.on("disconnect", () => {
     const name = socket.data?.name;
     if (!name) return;
+
     const timer = setTimeout(() => {
       for (const room in songState) {
         const state = songState[room];
         if (!state) continue;
-        if (state.currentSingerSocketId === socket.id) {
+
+        // 如果是正在唱歌的使用者
+        if (state.currentSinger === name) {
           giveExpForSinging(room, state.currentSinger);
           state.currentSinger = null;
           state.currentSingerSocketId = null;
-          broadcastMicState(room);
           nextSinger(room);
         }
+
+        // 從 queue 移除
         state.queue = state.queue.filter(u => u.name !== name);
-        console.log(`[Debug] ${name} 10秒未回來，移出 queue`);
+
+        // 🔹 從 rooms[room] 移除
+        if (rooms[room]) {
+          rooms[room] = rooms[room].filter(u => u.name !== name);
+          io.to(room).emit("updateUsers", rooms[room]);
+        }
+
+        console.log(`[Debug] ${name} 10秒未回來，從 room 移出`);
       }
       pendingReconnect.delete(name);
     }, 10000);
+
     pendingReconnect.set(name, timer);
   });
 
