@@ -2,7 +2,24 @@ import { pool } from "./db.js";
 import { expForNextLevel } from "./utils.js";
 import { rooms, pendingReconnect } from "./chat.js";
 import { AccessToken } from "livekit-server-sdk";
+
+export const pendingMicReconnect = new Map(); // 斷線暫存 10 秒
+export const forceStopSet = new Set(); // 強制踢的人 socketId
 export const songState = {};
+export function getRoomState(room) {
+  if (!songState[room]) {
+    songState[room] = {
+      queue: [],
+      currentSinger: null,
+      currentSingerSocketId: null,
+      singStartTime: null,
+      currentScore: null,
+      scoreTimer: null
+    };
+  }
+  return songState[room];
+}
+
 export function songSocket(io, socket) {
   // ===== 給唱歌超過 2 分鐘加 EXP =====
   async function giveExpForSinging(room, singer) {
@@ -124,42 +141,26 @@ export function songSocket(io, socket) {
   }
 
   socket.on("joinRoom", ({ room, name }) => {
-    socket.data.name = name;
-    socket.data.room = room;
-    // reconnect restore
-    if (pendingReconnect.has(name)) {
-      clearTimeout(pendingReconnect.get(name));
-      pendingReconnect.delete(name);
-      const state = songState[room];
-      if (state) {
-        // 更新 queue socketId
-        const q = state.queue.find(u => u.name === name);
-        if (q) q.socketId = socket.id;
-
-        // 更新 current singer socketId
-        if (state.currentSinger === name) {
-          state.currentSingerSocketId = socket.id;
-        }
-      }
-      console.log("♻️ reconnect restore:", name);
-    }
-    if (!songState[room]) songState[room] = { queue: [], currentSinger: null };
-
+    socket.data = { name, room };
     socket.join(`song-${room}`);
+    const state = getRoomState(room);
 
-    // 新進的人立即收到當前演唱者
-    const state = songState[room];
-    socket.emit("micStateUpdate", {
-      queue: state.queue.map(u => u.name),
-      currentSinger: state.currentSinger || null
-    });
+    // 如果 10 秒內重連，清掉暫存 timer
+    const oldTimer = pendingMicReconnect.get(name);
+    if (oldTimer) {
+      clearTimeout(oldTimer);
+      pendingMicReconnect.delete(name);
+    }
 
-    console.log(`[Debug] ${name} 進入 song room ${room}`);
+    // 更新 socketId
+    state.queue.forEach(u => { if (u.name === name) u.socketId = socket.id; });
+    if (state.currentSinger === name) state.currentSingerSocketId = socket.id;
+
+    broadcastMicState(room);
   });
 
   socket.on("joinQueue", ({ room, name }) => {
-    if (!songState[room])
-      songState[room] = { queue: [], currentSinger: null, currentSingerSocketId: null };
+    if (!songState[room]) getRoomState(room);
 
     const state = songState[room];
 
@@ -182,7 +183,7 @@ export function songSocket(io, socket) {
   });
 
   socket.on("grabMic", async ({ room, singer }) => {
-    if (!songState[room]) songState[room] = { queue: [], currentSinger: null, currentSingerSocketId: null };
+    if (!songState[room]) getRoomState(room);
     const state = songState[room];
     state.singStartTime = Date.now();
     // 如果有人正在唱，先踢掉
@@ -206,6 +207,7 @@ export function songSocket(io, socket) {
   });
 
   socket.on("adminMoveQueue", ({ room, fromIndex, toIndex }) => {
+    if (!songState[room]) getRoomState(room);
     const state = songState[room];
     if (!state) return;
 
@@ -226,29 +228,27 @@ export function songSocket(io, socket) {
     const state = songState[room];
     if (!state) return;
 
-    // 找到要踢的 socketId
-    const target = state.queue.find(u => u.name === singer) ||
+    let target = state.queue.find(u => u.name === singer && u.socketId) ||
       (state.currentSinger === singer ? { socketId: state.currentSingerSocketId } : null);
 
-    if (!target || !target.socketId) return;
+    if (!target?.socketId) return;
 
-    console.log(`[Debug] 管理員踢下麥: ${singer} in room ${room}`);
+    // 立即踢，不管暫存
+    forceStopSet.add(target.socketId);
 
-    // 如果是正在唱的，直接 force stop
     if (state.currentSinger === singer) {
       giveExpForSinging(room, singer);
-      io.to(target.socketId).emit("forceStopSing");
       state.currentSinger = null;
       state.currentSingerSocketId = null;
       nextSinger(room);
     }
-    // 如果在 queue 中，直接從 queue 移除
+
     state.queue = state.queue.filter(u => u.name !== singer);
-    // 全體更新
-    broadcastMicState(room); // 全體更新
+    broadcastMicState(room);
   });
 
   socket.on("stopSing", ({ room, singer }) => {
+    if (!songState[room]) getRoomState(room);
     const state = songState[room];
     if (!state) return;
 
@@ -262,40 +262,51 @@ export function songSocket(io, socket) {
   });
 
   socket.on("disconnect", () => {
-    const name = socket.data?.name;
-    if (!name) return;
+    const { name, room } = socket.data || {};
+    if (!name || !room) return;
+    const state = songState[room];
+    if (!state) return;
 
-    const timer = setTimeout(() => {
-      for (const room in songState) {
-        const state = songState[room];
-        if (!state) continue;
+    // 先檢查是否被 forceStop
+    if (forceStopSet.has(socket.id)) {
+      forceStopSet.delete(socket.id);
+      return; // 已被踢，不用暫存
+    }
 
-        // 如果是正在唱歌的使用者
-        if (state.currentSinger === name) {
-          giveExpForSinging(room, state.currentSinger);
-          state.currentSinger = null;
-          state.currentSingerSocketId = null;
-          nextSinger(room);
-        }
+    // 上麥的人
+    if (state.currentSinger === name && state.currentSingerSocketId === socket.id) {
+      // 設定 10 秒暫存
+      const timer = setTimeout(() => {
+        // 10 秒沒回來才清掉
+        state.currentSinger = null;
+        state.currentSingerSocketId = null;
+        nextSinger(room);
+        broadcastMicState(room);
+        pendingMicReconnect.delete(name);
+      }, 10000);
 
-        // 從 queue 移除
-        state.queue = state.queue.filter(u => u.name !== name);
+      pendingMicReconnect.set(name, timer);
+    }
 
-        // 🔹 從 rooms[room] 移除
-        if (rooms[room]) {
-          rooms[room] = rooms[room].filter(u => u.name !== name);
-          io.to(room).emit("updateUsers", rooms[room]);
-        }
+    // 排麥的人
+    state.queue.forEach(u => {
+      if (u.name === name && u.socketId === socket.id) {
+        const timer = setTimeout(() => {
+          state.queue = state.queue.filter(q => q.name !== name);
+          broadcastMicState(room);
+          pendingMicReconnect.delete(name);
+        }, 10000);
 
-        console.log(`[Debug] ${name} 10秒未回來，從 room 移出`);
+        pendingMicReconnect.set(name, timer);
+        u.socketId = null; // 暫時清掉 socketId，保留順序
       }
-      pendingReconnect.delete(name);
-    }, 10000);
+    });
 
-    pendingReconnect.set(name, timer);
+    broadcastMicState(room);
   });
 
   socket.on("rateSinger", ({ room, singer, score }) => {
+    if (!songState[room]) getRoomState(room);
     const state = songState[room];
     if (!state) return;
 
