@@ -150,7 +150,7 @@ export function chatHandlers(io, socket) {
         onlineUsers.set(name, Date.now());
         addUserIP(ip, name);
 
-        if (OPENAI && !rooms[room]._aiInit) {
+        if (OPENAI && !aiInit[room]) {
             aiNames.forEach(ai => {
                 rooms[room].push({
                     id: ai,
@@ -162,7 +162,9 @@ export function chatHandlers(io, socket) {
                     socketId: null
                 });
             });
-            rooms[room]._aiInit = true;
+
+            aiInit[room] = true;
+            startAIAutoTalk(io, room);
         }
 
         // 初始化房間狀態
@@ -177,8 +179,6 @@ export function chatHandlers(io, socket) {
         io.to(room).emit("updateUsers", rooms[room]);
         io.to(room).emit("videoUpdate", videoState[room].currentVideo);
         io.to(room).emit("videoQueueUpdate", videoState[room].queue);
-
-        if (OPENAI) startAIAutoTalk(io, room);
     });
 
     // --- 聊天訊息 ---
@@ -470,21 +470,22 @@ export function chatHandlers(io, socket) {
 // --- AI 自動對話 ---
 export function startAIAutoTalk(io, room) {
     if (aiTimers[room]) return;
-
-    async function loop() {
+    const loop = async () => {
+        const humans = (rooms[room] || []).filter(u => u.type !== "AI");
+        if (!humans.length) {
+            clearTimeout(aiTimers[room]);
+            delete aiTimers[room];
+            return;
+        }
         const aiList = (rooms[room] || []).filter(u => u.type === "AI");
         if (!aiList.length) return;
-
         const speaker = aiList[Math.floor(Math.random() * aiList.length)];
-        const reply = await callAI("繼續延續話題但不要提到我們正在延續話題這幾個字", speaker.name);
-
-        io.to(room).emit("message", { user: { name: speaker.name }, message: reply });
-        if (!roomContext[room]) roomContext[room] = [];
-        roomContext[room].push({ user: speaker.name, text: reply });
-        if (roomContext[room].length > 20) roomContext[room].shift();
-
+        const reply = await callAI("延續聊天室話題自然聊天", speaker.name);
+        io.to(room).emit("message", {
+            user: { name: speaker.name },
+            message: reply
+        });
         aiTimers[room] = setTimeout(loop, 30000 + Math.random() * 15000);
-    }
-
-    loop();
+    };
+    aiTimers[room] = setTimeout(loop, 5000);
 }
