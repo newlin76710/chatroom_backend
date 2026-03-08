@@ -8,6 +8,7 @@ const AML = process.env.ADMIN_MAX_LEVEL || 99;
 const ANL = process.env.ADMIN_MIN_LEVEL || 91;
 const GUEST = process.env.OPENGUEST === "true";
 const OPENAI = process.env.OPENAI === "true"
+export const aiInit = {};
 export const rooms = {};
 export const roomContext = {};
 export const aiTimers = {};
